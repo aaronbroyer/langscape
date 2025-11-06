@@ -36,7 +36,7 @@ public actor Logger {
         destinations.append(destination)
     }
 
-    public func log(_ message: @autoclosure () -> String, level: Level = .info, category: String? = nil) {
+    public func log(_ message: @autoclosure @Sendable () -> String, level: Level = .info, category: String? = nil) {
         let timestamp = dateFormatter.string(from: Date())
         var composed = "[\(timestamp)] [\(level.rawValue.uppercased())]"
         if let category {
