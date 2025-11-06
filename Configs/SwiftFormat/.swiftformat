@@ -1,0 +1,7 @@
+--allman false
+--indent 4
+--maxwidth 120
+--stripunusedargs closure-only
+--wraparguments before-first
+--wrapcollections before-first
+--swiftversion 6.0

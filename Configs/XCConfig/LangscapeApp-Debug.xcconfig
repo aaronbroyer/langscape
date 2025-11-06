@@ -1,0 +1,2 @@
+#include "Debug.xcconfig"
+INFOPLIST_FILE = LangscapeApp/Info.plist
