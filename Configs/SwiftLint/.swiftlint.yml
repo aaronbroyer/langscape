@@ -1,0 +1,24 @@
+included:
+  - LangscapeApp/Sources
+  - DesignSystem/Sources
+  - Utilities/Sources
+  - UIComponents/Sources
+  - DetectionKit/Sources
+  - GameKitLS/Sources
+  - VocabStore/Sources
+  - LLMKit/Sources
+excluded:
+  - Tests
+opt_in_rules:
+  - empty_count
+  - explicit_init
+  - fatal_error_message
+  - force_unwrapping
+line_length:
+  warning: 120
+  error: 140
+identifier_name:
+  min_length:
+    warning: 2
+    error: 1
+reporter: "xcode"

@@ -1,0 +1,2 @@
+#include "Release.xcconfig"
+INFOPLIST_FILE = LangscapeApp/Info.plist
