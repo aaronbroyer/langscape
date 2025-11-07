@@ -14,14 +14,18 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../Utilities"),
-        .package(path: "../DetectionKit")
+        .package(path: "../DetectionKit"),
+        .package(path: "../VocabStore"),
+        .package(path: "../LLMKit")
     ],
     targets: [
         .target(
             name: "GameKitLS",
             dependencies: [
                 "Utilities",
-                "DetectionKit"
+                "DetectionKit",
+                "VocabStore",
+                "LLMKit"
             ],
             resources: [
                 .process("Resources")
