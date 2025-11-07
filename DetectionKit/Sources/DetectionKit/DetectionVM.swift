@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import Utilities
 
 #if canImport(Combine)
@@ -23,6 +24,7 @@ public final class DetectionVM: ObservableObject {
     @Published public private(set) var detections: [Detection] = []
     @Published public private(set) var fps: Double = 0
     @Published public private(set) var lastError: DetectionError?
+    @Published public private(set) var inputImageSize: CGSize?
 
     public let throttleInterval: TimeInterval
 
@@ -44,6 +46,10 @@ public final class DetectionVM: ObservableObject {
         self.logger = logger
         self.processor = DetectionProcessor(service: service)
         self.fpsWindow = fpsWindow
+    }
+
+    public func setInputSize(_ size: CGSize) {
+        self.inputImageSize = size
     }
 
     public func enqueue(_ request: DetectionRequest) {
