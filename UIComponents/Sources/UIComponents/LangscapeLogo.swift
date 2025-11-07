@@ -51,7 +51,7 @@ public struct LangscapeLogo: View {
                 .scaledToFit()
                 .frame(width: glyphSize, height: glyphSize)
         } else {
-            GlobeChatMark(size: glyphSize, tint: tint)
+            ContextMark(size: glyphSize, tint: tint)
         }
     }
 
@@ -65,49 +65,54 @@ public struct LangscapeLogo: View {
 
 // MARK: - Globe + Chat bubble mark
 
-fileprivate struct GlobeChatMark: View {
+fileprivate struct ContextMark: View {
     let size: CGFloat
     let tint: Color
-    var lineWidth: CGFloat { max(1.25, size * 0.07) }
+    private var lineWidth: CGFloat { max(1.2, size * 0.075) }
 
     var body: some View {
         ZStack {
-            // Outer circle
-            Circle()
-                .stroke(tint, lineWidth: lineWidth)
-
-            // Parallels and meridians clipped to circle
-            ZStack {
-                // Equator
-                Rectangle()
-                    .fill(tint)
-                    .frame(height: lineWidth)
-
-                // Parallels (top/bottom)
-                Path(ellipseIn: CGRect(x: size * 0.12, y: size * 0.27, width: size * 0.76, height: size * 0.46))
-                    .stroke(tint, lineWidth: lineWidth)
-                Path(ellipseIn: CGRect(x: size * 0.12, y: size * 0.27, width: size * 0.76, height: size * 0.46))
-                    .rotation(Angle(degrees: 180))
-                    .stroke(tint, lineWidth: lineWidth)
-
-                // Meridians (left/right)
-                Path(ellipseIn: CGRect(x: size * 0.25, y: size * 0.08, width: size * 0.50, height: size * 0.84))
-                    .stroke(tint, lineWidth: lineWidth)
-                Path(ellipseIn: CGRect(x: size * 0.25, y: size * 0.08, width: size * 0.50, height: size * 0.84))
-                    .rotation(Angle(degrees: 180))
-                    .stroke(tint, lineWidth: lineWidth)
-            }
-            .clipShape(Circle().inset(by: lineWidth * 0.5))
-
-            // Chat tail (minimal, attached to lower-right)
+            // Viewfinder corners
             Path { p in
-                let r = size / 2
-                p.move(to: CGPoint(x: r * 1.15, y: r * 1.10))
-                p.addLine(to: CGPoint(x: r * 1.55, y: r * 1.42))
-                p.addLine(to: CGPoint(x: r * 0.98, y: r * 1.42))
-                p.closeSubpath()
+                let c = size * 0.16 // inset from edges
+                let l = size * 0.24 // corner length
+
+                // top-left
+                p.move(to: CGPoint(x: c, y: c + l))
+                p.addLine(to: CGPoint(x: c, y: c))
+                p.addLine(to: CGPoint(x: c + l, y: c))
+
+                // top-right
+                p.move(to: CGPoint(x: size - c - l, y: c))
+                p.addLine(to: CGPoint(x: size - c, y: c))
+                p.addLine(to: CGPoint(x: size - c, y: c + l))
+
+                // bottom-right
+                p.move(to: CGPoint(x: size - c, y: size - c - l))
+                p.addLine(to: CGPoint(x: size - c, y: size - c))
+                p.addLine(to: CGPoint(x: size - c - l, y: size - c))
+
+                // bottom-left
+                p.move(to: CGPoint(x: c + l, y: size - c))
+                p.addLine(to: CGPoint(x: c, y: size - c))
+                p.addLine(to: CGPoint(x: c, y: size - c - l))
             }
-            .fill(tint)
+            .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+
+            // Central label pill — represents a contextual label in scene
+            Capsule(style: .circular)
+                .fill(tint.opacity(0.12))
+                .frame(width: size * 0.52, height: size * 0.22)
+                .overlay(
+                    Capsule(style: .circular)
+                        .stroke(tint.opacity(0.9), lineWidth: max(1, lineWidth * 0.66))
+                )
+
+            // Small chat dot to suggest language/speech
+            Circle()
+                .fill(tint)
+                .frame(width: size * 0.10, height: size * 0.10)
+                .offset(x: size * 0.22, y: size * 0.22)
         }
         .frame(width: size, height: size)
         .drawingGroup()
