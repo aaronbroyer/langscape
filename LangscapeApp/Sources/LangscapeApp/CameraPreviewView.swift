@@ -525,7 +525,24 @@ private struct RoundPlayLayer: View {
     }
 
     private func destination(for point: CGPoint) -> DetectedObject.ID? {
-        frames.first { expand(frame: $0.value).contains(point) }?.key
+        // 1) Prefer a direct hit inside an expanded frame
+        if let hit = frames.first(where: { expand(frame: $0.value).contains(point) })?.key {
+            return hit
+        }
+        // 2) Otherwise, snap to the nearest object within a reasonable radius
+        var best: (id: DetectedObject.ID, distance: CGFloat, frame: CGRect)?
+        for (id, frame) in frames {
+            let center = CGPoint(x: frame.midX, y: frame.midY)
+            let dx = center.x - point.x
+            let dy = center.y - point.y
+            let d = sqrt(dx*dx + dy*dy)
+            if best == nil || d < best!.distance { best = (id, d, frame) }
+        }
+        if let best {
+            let radius = max(44, min(best.frame.width, best.frame.height) * 0.6)
+            return best.distance <= radius ? best.id : nil
+        }
+        return nil
     }
 
     private func expand(frame: CGRect) -> CGRect {
