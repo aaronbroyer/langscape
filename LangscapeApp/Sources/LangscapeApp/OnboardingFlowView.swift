@@ -1,6 +1,7 @@
 import SwiftUI
 import Utilities
 import UIComponents
+import DesignSystem
 
 struct OnboardingFlowView: View {
     @ObservedObject var viewModel: OnboardingViewModel
@@ -20,16 +21,31 @@ struct OnboardingFlowView: View {
                 }
                 .padding()
             case .slides:
-                VStack(spacing: 22) {
-                    LangscapeLogo(style: .mark, glyphSize: 56, brand: .context)
-                    Text("Learn by labeling what you see.")
-                        .font(.title2)
-                        .multilineTextAlignment(.center)
-                    CTAButton("Choose Language", systemImage: "character.book.closed") {
-                        viewModel.showLanguageSelection()
+                ZStack {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+
+                        VStack(spacing: Spacing.medium.cgFloat) {
+                            LangscapeLogo(style: .mark, glyphSize: 72, brand: .context)
+                                .shadow(color: Color.black.opacity(0.18), radius: 10, x: 0, y: 6)
+
+                            Text("Language, layered on life")
+                                .font(Typography.title.font.weight(.semibold))
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(ColorPalette.primary.swiftUIColor)
+                                .padding(.horizontal, Spacing.xLarge.cgFloat)
+                        }
+                        .frame(maxWidth: 480)
+
+                        Spacer()
+
+                        CTAButton("Choose Language") {
+                            viewModel.showLanguageSelection()
+                        }
+                        .padding(.horizontal, Spacing.xLarge.cgFloat)
+                        .padding(.bottom, Spacing.xLarge.cgFloat * 1.2)
                     }
                 }
-                .padding()
             case .languageSelection:
                 VStack(spacing: 16) {
                     Text("Choose your learning direction")
