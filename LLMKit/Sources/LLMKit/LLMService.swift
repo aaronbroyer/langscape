@@ -1,5 +1,8 @@
 import Foundation
 import Utilities
+#if canImport(CoreML)
+import CoreML
+#endif
 
 public protocol LLMServiceProtocol: Sendable {
     func translate(_ text: String, from source: Language, to target: Language) async throws -> String
@@ -42,17 +45,21 @@ public actor LLMService: LLMServiceProtocol {
         }
     }
 
-    private enum Constants {
-        static let modelManifestName = "model-manifest"
-        static let modelManifestExtension = "json"
+    // Manifest describes a bundled CoreML translation model, if present.
+    private struct Manifest: Decodable {
+        let modelFile: String
+        let inputFeature: String
+        let outputFeature: String
+        let source: Language
+        let target: Language
     }
 
     private let client: any LLMClient
     private let bundle: Bundle
     private let logger: Logger
     private let fallbackFormatter: FallbackFormatter
-    private let modelAvailable: Bool
     private var cache: [TranslationKey: String]
+    private var translator: CoreMLTranslator?
 
     public init(client: any LLMClient = LangscapeLLM(), bundle: Bundle? = nil, logger: Logger = .shared) {
         self.client = client
@@ -61,7 +68,7 @@ public actor LLMService: LLMServiceProtocol {
         self.logger = logger
         self.fallbackFormatter = FallbackFormatter()
         self.cache = [:]
-        self.modelAvailable = LLMService.hasBundledModel(in: resourceBundle, logger: logger)
+        self.translator = LLMService.loadTranslator(from: resourceBundle, logger: logger)
     }
 
     public func translate(_ text: String, from source: Language, to target: Language) async throws -> String {
@@ -81,24 +88,16 @@ public actor LLMService: LLMServiceProtocol {
         }
 
         let resolved: String
-        if modelAvailable {
-            let prompt = LLMService.prompt(for: normalized, source: source, target: target)
-            let raw = await client.send(prompt: prompt)
-            let candidate = LLMService.extractTranslation(from: raw)
-            if let candidate, !candidate.isEmpty {
-                resolved = candidate
-            } else {
+        if let translator, translator.supports(source: source, target: target) {
+            do {
+                resolved = try await translator.translate(normalized, from: source, to: target)
+            } catch {
+                Task { await logger.log("CoreML translator failed: \(error.localizedDescription). Falling back.", level: .error, category: "LLMKit") }
                 resolved = fallbackFormatter.translation(for: normalized, source: source, target: target)
             }
         } else {
             resolved = fallbackFormatter.translation(for: normalized, source: source, target: target)
-            Task {
-                await logger.log(
-                    "LLM model missing – using deterministic fallback for translation",
-                    level: .warning,
-                    category: "LLMKit"
-                )
-            }
+            Task { await logger.log("No local translation model – using deterministic fallback", level: .warning, category: "LLMKit") }
         }
 
         cache[key] = resolved
@@ -106,19 +105,23 @@ public actor LLMService: LLMServiceProtocol {
         return resolved
     }
 
-    private static func hasBundledModel(in bundle: Bundle, logger: Logger) -> Bool {
-        if bundle.url(forResource: Constants.modelManifestName, withExtension: Constants.modelManifestExtension) != nil {
-            return true
+    private static func loadTranslator(from bundle: Bundle, logger: Logger) -> CoreMLTranslator? {
+        #if canImport(CoreML)
+        guard let manifestURL = bundle.url(forResource: "model-manifest", withExtension: "json") else {
+            Task { await logger.log("No translation manifest found", level: .debug, category: "LLMKit") }
+            return nil
         }
-
-        Task {
-            await logger.log(
-                "Bundled LLM manifest missing. Falling back to deterministic translations.",
-                level: .warning,
-                category: "LLMKit"
-            )
+        do {
+            let data = try Data(contentsOf: manifestURL)
+            let manifest = try JSONDecoder().decode(Manifest.self, from: data)
+            return try CoreMLTranslator(bundle: bundle, manifest: manifest, logger: logger)
+        } catch {
+            Task { await logger.log("Failed to load translator manifest: \(error.localizedDescription)", level: .error, category: "LLMKit") }
+            return nil
         }
-        return false
+        #else
+        return nil
+        #endif
     }
 
     private static func prompt(for text: String, source: Language, target: Language) -> String {
