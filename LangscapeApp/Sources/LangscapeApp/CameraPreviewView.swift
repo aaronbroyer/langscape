@@ -179,11 +179,33 @@ private final class CameraSessionController: NSObject, ObservableObject {
 extension CameraSessionController: AVCaptureVideoDataOutputSampleBufferDelegate {
     nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        let request = DetectionRequest(timestamp: Date(), pixelBuffer: pixelBuffer)
+        #if canImport(ImageIO)
+        let cgOrientationRaw: UInt32 = {
+            // Map AVCaptureVideoOrientation (back camera) to CGImagePropertyOrientation
+            switch connection.videoOrientation {
+            case .portrait: return CGImagePropertyOrientation.right.rawValue
+            case .portraitUpsideDown: return CGImagePropertyOrientation.left.rawValue
+            case .landscapeRight: return CGImagePropertyOrientation.up.rawValue
+            case .landscapeLeft: return CGImagePropertyOrientation.down.rawValue
+            @unknown default: return CGImagePropertyOrientation.up.rawValue
+            }
+        }()
+        #else
+        let cgOrientationRaw: UInt32? = nil
+        #endif
+        let request = DetectionRequest(timestamp: Date(), pixelBuffer: pixelBuffer, imageOrientationRaw: cgOrientationRaw)
         Task { @MainActor [weak self] in
-            let w = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
-            let h = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-            self?.viewModel?.setInputSize(CGSize(width: w, height: h))
+            let pbw = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+            let pbh = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+            // Use oriented input dimensions to match Vision's coordinate space
+            let orientedSize: CGSize
+            switch connection.videoOrientation {
+            case .portrait, .portraitUpsideDown:
+                orientedSize = CGSize(width: pbh, height: pbw)
+            default:
+                orientedSize = CGSize(width: pbw, height: pbh)
+            }
+            self?.viewModel?.setInputSize(orientedSize)
             self?.viewModel?.enqueue(request)
         }
     }

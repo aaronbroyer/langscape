@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 #if canImport(CoreVideo)
 import CoreVideo
@@ -11,11 +14,14 @@ public struct DetectionRequest {
     public let id: UUID
     public let timestamp: Date
     public let pixelBuffer: DetectionPixelBuffer
+    // Raw CGImagePropertyOrientation rawValue to avoid directly depending on ImageIO in clients
+    public let imageOrientationRaw: UInt32?
 
-    public init(id: UUID = UUID(), timestamp: Date = Date(), pixelBuffer: DetectionPixelBuffer) {
+    public init(id: UUID = UUID(), timestamp: Date = Date(), pixelBuffer: DetectionPixelBuffer, imageOrientationRaw: UInt32? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.pixelBuffer = pixelBuffer
+        self.imageOrientationRaw = imageOrientationRaw
     }
 }
 

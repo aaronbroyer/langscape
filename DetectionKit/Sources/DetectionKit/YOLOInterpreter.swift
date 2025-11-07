@@ -83,7 +83,12 @@ public actor YOLOInterpreter: DetectionService {
 
         #if canImport(Vision)
         case let .vision(model):
+            #if canImport(ImageIO)
+            let orientation = request.imageOrientationRaw.flatMap { CGImagePropertyOrientation(rawValue: $0) } ?? .up
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation)
+            #else
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
+            #endif
             let request = VNCoreMLRequest(model: model)
             request.imageCropAndScaleOption = .scaleFill
 
