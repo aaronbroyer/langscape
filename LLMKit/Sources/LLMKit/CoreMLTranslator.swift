@@ -17,7 +17,7 @@ public enum Language: String, Codable, Sendable {
 }
 
 #if canImport(CoreML)
-public struct CoreMLTranslator: Sendable {
+public struct CoreMLTranslator {
     public enum Error: Swift.Error { case modelNotFound, predictionFailed(String) }
 
     private let model: MLModel
@@ -41,17 +41,10 @@ public struct CoreMLTranslator: Sendable {
             throw Error.modelNotFound
         }
 
-        if modelURL.pathExtension == "mlmodel" {
-            if #available(iOS 18.0, macOS 15.0, *) {
-                let compiled = try awaitResult(MLModel.compileModel(at: modelURL))
-                self.model = try MLModel(contentsOf: compiled)
-            } else {
-                let compiled = try MLModel.compileModel(at: modelURL)
-                self.model = try MLModel(contentsOf: compiled)
-            }
-        } else {
-            self.model = try MLModel(contentsOf: modelURL)
-        }
+        // Expect a compiled model (.mlmodelc or .mlpackage). If a raw .mlmodel is provided,
+        // require the build step to compile it to avoid async compile in initialiser.
+        guard modelURL.pathExtension != "mlmodel" else { throw Error.modelNotFound }
+        self.model = try MLModel(contentsOf: modelURL)
     }
 
     public func supports(source: Language, target: Language) -> Bool {
@@ -73,14 +66,10 @@ public struct CoreMLTranslator: Sendable {
     }
 }
 
-// Helper to await async functions in init path for iOS 18's async compile API
-@available(iOS 18.0, macOS 15.0, *)
-private func awaitResult<T>(_ f: @autoclosure () async throws -> T) throws -> T { var r: Result<T, Swift.Error>!; let s = DispatchSemaphore(value: 0); Task { do { r = .success(try await f()); } catch { r = .failure(error) } ; s.signal() }; s.wait(); return try r.get() }
 #else
-public struct CoreMLTranslator: Sendable {
+public struct CoreMLTranslator {
     public func supports(source: Language, target: Language) -> Bool { false }
     public func translate(_ text: String, from source: Language, to target: Language) async throws -> String { text }
     public init(bundle: Bundle, manifest: Any, logger: Logger) throws {}
 }
 #endif
-
