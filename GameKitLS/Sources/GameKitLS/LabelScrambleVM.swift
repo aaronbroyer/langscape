@@ -173,10 +173,8 @@ public final class LabelScrambleVM: ObservableObject {
                 }
             }
         }
-}
-
-private extension LabelScrambleVM {
-    func prepareRound(_ generated: Round, logMessage: String) async {
+    }
+    private func prepareRound(_ generated: Round, logMessage: String) async {
         if Task.isCancelled { return }
         var didPrepare = false
         await MainActor.run {
@@ -190,7 +188,6 @@ private extension LabelScrambleVM {
         guard didPrepare else { return }
         Task { await logger.log(logMessage, level: .info, category: "GameKitLS.LabelScrambleVM") }
     }
-}
 }
 
 private func withAnimationIfAvailable(_ updates: @escaping () -> Void) {
