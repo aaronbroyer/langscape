@@ -19,6 +19,7 @@ struct CameraPreviewView: View {
     @State private var showCompletionFlash = false
     @State private var homeCardPressed = false
     @State private var startPulse = false
+    @State private var showDetections = true
 
     var body: some View {
         GeometryReader { proxy in
@@ -59,10 +60,10 @@ struct CameraPreviewView: View {
             case .home:
                 homeOverlay
             case .scanning:
-                detectionOverlay(for: viewModel.detections, in: size)
+                if showDetections { detectionOverlay(for: viewModel.detections, in: size) }
                 scanningIndicator
             case .ready:
-                detectionOverlay(for: viewModel.detections, in: size)
+                if showDetections { detectionOverlay(for: viewModel.detections, in: size) }
                 startButton
             case .playing:
                 roundOverlay(in: size, interactive: true)
@@ -250,6 +251,11 @@ struct CameraPreviewView: View {
             }
         case .ready:
             startPulseAnimation()
+            withAnimation(.easeInOut(duration: 0.2)) { showDetections = true }
+        case .scanning:
+            withAnimation(.easeInOut(duration: 0.2)) { showDetections = true }
+        case .playing, .paused:
+            withAnimation(.easeInOut(duration: 0.2)) { showDetections = false }
         default:
             if startPulse {
                 withAnimation(.easeInOut(duration: 0.25)) {
