@@ -130,7 +130,7 @@ public actor YOLOInterpreter: DetectionService {
                     if #available(iOS 18.0, macOS 15.0, *) {
                         compiled = try await MLModel.compileModel(at: raw)
                     } else {
-                        compiled = try MLModel.compileModel(at: raw)
+                        compiled = try await MLModel.compileModel(at: raw)
                     }
                     return compiled
                 } catch {
