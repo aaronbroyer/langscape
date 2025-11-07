@@ -37,8 +37,9 @@ public actor YOLOInterpreter: DetectionService {
             do {
                 let mlModel = try MLModel(contentsOf: modelURL)
                 let visionModel = try VNCoreMLModel(for: mlModel)
-                if let inputName = mlModel.modelDescription.inputDescriptionsByName.first?.key {
-                    visionModel.inputImageFeatureName = inputName
+                // Only set inputImageFeatureName when the feature is actually an image.
+                if let imageInput = mlModel.modelDescription.inputDescriptionsByName.first(where: { $0.value.type == .image })?.key {
+                    visionModel.inputImageFeatureName = imageInput
                 }
                 backend = .vision(model: visionModel)
                 isPrepared = true
