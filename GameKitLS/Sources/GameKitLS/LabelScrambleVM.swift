@@ -31,6 +31,8 @@ public final class LabelScrambleVM: ObservableObject {
 
     private let roundGenerator: RoundGenerator
     private let logger: Logger
+    private var scanningBeganAt: Date?
+    private let scanningTimeout: TimeInterval = 3.0
 
     public init(roundGenerator: RoundGenerator = RoundGenerator(), logger: Logger = .shared) {
         self.roundGenerator = roundGenerator
@@ -46,6 +48,7 @@ public final class LabelScrambleVM: ObservableObject {
         placedLabels.removeAll()
         round = nil
         lastIncorrectLabelID = nil
+        scanningBeganAt = Date()
         withAnimationIfAvailable { self.phase = .scanning }
         Task { await logger.log("Entered scanning phase", level: .info, category: "GameKitLS.LabelScrambleVM") }
     }
@@ -53,11 +56,26 @@ public final class LabelScrambleVM: ObservableObject {
     public func ingestDetections(_ detections: [Detection]) {
         switch phase {
         case .scanning:
-            guard let generated = roundGenerator.makeRound(from: detections) else { return }
-            round = generated
-            placedLabels = []
-            withAnimationIfAvailable { self.phase = .ready }
-            Task { await logger.log("Round ready with \(generated.objects.count) objects", level: .info, category: "GameKitLS.LabelScrambleVM") }
+            if let generated = roundGenerator.makeRound(from: detections) {
+                round = generated
+                placedLabels = []
+                withAnimationIfAvailable { self.phase = .ready }
+                Task { await logger.log("Round ready with \(generated.objects.count) objects", level: .info, category: "GameKitLS.LabelScrambleVM") }
+            } else if let start = scanningBeganAt, Date().timeIntervalSince(start) >= scanningTimeout {
+                // Fallback after timeout: build a round from whatever unique detections we have (up to 3)
+                let grouped = Dictionary(grouping: detections, by: { $0.label.lowercased() })
+                let unique = grouped.values.compactMap { $0.max(by: { $0.confidence < $1.confidence }) }
+                guard !unique.isEmpty else { return }
+                let capped = Array(unique.prefix(3))
+                let objects = capped.map(DetectedObject.init(from:))
+                let translator = PlaceholderLabelTranslator()
+                let labels = objects.map { Label(text: translator.translation(for: $0.sourceLabel), sourceLabel: $0.sourceLabel, objectID: $0.id) }
+                let generated = Round(objects: objects, labels: labels)
+                round = generated
+                placedLabels = []
+                withAnimationIfAvailable { self.phase = .ready }
+                Task { await logger.log("Fallback round ready with \(generated.objects.count) objects", level: .info, category: "GameKitLS.LabelScrambleVM") }
+            }
         case .ready:
             guard let currentRound = round else { return }
             round = currentRound.updating(with: detections)
