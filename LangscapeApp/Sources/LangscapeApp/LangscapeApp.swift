@@ -71,16 +71,16 @@ private struct AppFlowView: View {
 
     private func configureInitialRoute() {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["RESET_ONBOARDING"] == "1" {
-            settings.reset()
-            path.removeAll()
-            onboardingViewModel.step = .splash
-            return
-        }
-        #endif
+        // In Debug builds always start at onboarding to facilitate testing.
+        settings.reset()
+        path.removeAll()
+        onboardingViewModel.step = .splash
+        return
+        #else
         if settings.hasCompletedOnboarding {
             transitionToExperience()
         }
+        #endif
     }
 
     private func transitionToExperience() {
