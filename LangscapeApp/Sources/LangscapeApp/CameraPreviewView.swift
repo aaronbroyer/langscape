@@ -175,8 +175,8 @@ extension CameraSessionController: AVCaptureVideoDataOutputSampleBufferDelegate 
     nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let request = DetectionRequest(timestamp: Date(), pixelBuffer: pixelBuffer)
-        Task { [weak viewModel] in
-            await viewModel?.enqueue(request)
+        Task { @MainActor [weak self] in
+            self?.viewModel?.enqueue(request)
         }
     }
 }
