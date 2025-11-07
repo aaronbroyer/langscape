@@ -22,7 +22,7 @@ let package = Package(
                 "Utilities"
             ],
             resources: [
-                .process("Resources")
+                .copy("Resources/MockYOLO.mlmodelc")
             ]
         ),
         .testTarget(
