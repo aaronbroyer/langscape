@@ -37,7 +37,9 @@ public actor YOLOInterpreter: DetectionService {
             do {
                 let mlModel = try MLModel(contentsOf: modelURL)
                 let visionModel = try VNCoreMLModel(for: mlModel)
-                visionModel.inputImageFeatureName = mlModel.modelDescription.inputDescriptionsByName.first?.key
+                if let inputName = mlModel.modelDescription.inputDescriptionsByName.first?.key {
+                    visionModel.inputImageFeatureName = inputName
+                }
                 backend = .vision(model: visionModel)
                 isPrepared = true
                 await logger.log("Loaded YOLO model: \(modelURL.lastPathComponent)", level: .info, category: "DetectionKit.YOLOInterpreter")
@@ -124,7 +126,12 @@ public actor YOLOInterpreter: DetectionService {
             // If a raw .mlmodel is included, compile it on device.
             if let raw = Bundle.module.url(forResource: name, withExtension: "mlmodel") {
                 do {
-                    let compiled = try MLModel.compileModel(at: raw)
+                    let compiled: URL
+                    if #available(iOS 18.0, macOS 15.0, *) {
+                        compiled = try await MLModel.compileModel(at: raw)
+                    } else {
+                        compiled = try MLModel.compileModel(at: raw)
+                    }
                     return compiled
                 } catch {
                     await logger.log("Failed to compile \(raw.lastPathComponent): \(error.localizedDescription)", level: .error, category: "DetectionKit.YOLOInterpreter")
