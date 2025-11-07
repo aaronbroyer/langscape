@@ -19,6 +19,7 @@ struct CameraPreviewView: View {
 
                 detectionOverlay(in: proxy.size)
 
+                #if DEBUG
                 VStack(alignment: .leading, spacing: 8) {
                     Text("FPS: \(viewModel.fps, specifier: "%.1f")")
                         .font(.headline)
@@ -38,6 +39,7 @@ struct CameraPreviewView: View {
                     Spacer()
                 }
                 .padding()
+                #endif
             }
             .background(Color.black)
             .task {
@@ -58,7 +60,6 @@ struct CameraPreviewView: View {
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(Color.green, lineWidth: 2)
                     .frame(width: rect.width, height: rect.height)
-                    .position(x: rect.midX, y: rect.midY)
                     .overlay(alignment: .topLeading) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(detection.label)
@@ -72,6 +73,7 @@ struct CameraPreviewView: View {
                         .foregroundStyle(Color.white)
                         .offset(x: 4, y: 4)
                     }
+                    .position(x: rect.midX, y: rect.midY)
             }
         }
         .frame(width: size.width, height: size.height)
