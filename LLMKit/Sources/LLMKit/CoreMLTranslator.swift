@@ -4,17 +4,7 @@ import Utilities
 import CoreML
 #endif
 
-public enum Language: String, Codable, Sendable {
-    case english
-    case spanish
-
-    public var displayName: String {
-        switch self {
-        case .english: return "English"
-        case .spanish: return "Spanish"
-        }
-    }
-}
+public typealias Language = Utilities.Language
 
 #if canImport(CoreML)
 public struct CoreMLTranslator {
@@ -55,7 +45,11 @@ public struct CoreMLTranslator {
         let provider = try MLDictionaryFeatureProvider(dictionary: [inputName: text])
         let out: MLFeatureProvider
         do {
-            out = try model.prediction(from: provider)
+            if #available(iOS 18.0, macOS 15.0, *) {
+                out = try await model.prediction(from: provider)
+            } else {
+                out = try model.prediction(from: provider)
+            }
         } catch {
             throw Error.predictionFailed(error.localizedDescription)
         }
