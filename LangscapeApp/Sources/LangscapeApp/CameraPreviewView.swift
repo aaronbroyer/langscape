@@ -58,7 +58,7 @@ struct CameraPreviewView: View {
     private func detectionOverlay(in size: CGSize) -> some View {
         ZStack {
             ForEach(viewModel.detections) { detection in
-                let rect = detection.boundingBox.rect(in: size)
+                let rect = rect(for: detection, in: size)
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(Color.green, lineWidth: 2)
                     .frame(width: rect.width, height: rect.height)
@@ -88,6 +88,7 @@ private struct CameraPreviewLayer: UIViewRepresentable {
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.videoPreviewLayer.session = session
+        view.videoPreviewLayer.videoGravity = .resizeAspectFill
         return view
     }
 
@@ -180,6 +181,9 @@ extension CameraSessionController: AVCaptureVideoDataOutputSampleBufferDelegate 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let request = DetectionRequest(timestamp: Date(), pixelBuffer: pixelBuffer)
         Task { @MainActor [weak self] in
+            let w = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+            let h = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+            self?.viewModel?.setInputSize(CGSize(width: w, height: h))
             self?.viewModel?.enqueue(request)
         }
     }
@@ -192,6 +196,29 @@ private extension NormalizedRect {
         let x = CGFloat(origin.x) * size.width
         let y = CGFloat(origin.y) * size.height
         return CGRect(x: x, y: y, width: width, height: height)
+    }
+}
+
+private extension CameraPreviewView {
+    func rect(for detection: Detection, in viewSize: CGSize) -> CGRect {
+        if let imgSize = viewModel.inputImageSize, imgSize.width > 0, imgSize.height > 0 {
+            let sw = viewSize.width
+            let sh = viewSize.height
+            let iw = imgSize.width
+            let ih = imgSize.height
+            let scale = max(sw / iw, sh / ih)
+            let dw = iw * scale
+            let dh = ih * scale
+            let offsetX = (sw - dw) / 2
+            let offsetY = (sh - dh) / 2
+            let bb = detection.boundingBox
+            let x = offsetX + CGFloat(bb.origin.x) * dw
+            let y = offsetY + CGFloat(bb.origin.y) * dh
+            let w = CGFloat(bb.size.width) * dw
+            let h = CGFloat(bb.size.height) * dh
+            return CGRect(x: x, y: y, width: w, height: h)
+        }
+        return detection.boundingBox.rect(in: viewSize)
     }
 }
 #endif
