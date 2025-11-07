@@ -162,7 +162,7 @@ struct CameraPreviewView: View {
                         switch overlay {
                         case .noObjects:
                             Text("No objects detected")
-                                .font(Typography.title3.font.weight(.semibold))
+                                .font(Typography.title.font.weight(.semibold))
                                 .foregroundStyle(ColorPalette.primary.swiftUIColor)
 
                             Text("Try pointing your camera at a scene with more objects.")
@@ -175,7 +175,7 @@ struct CameraPreviewView: View {
                             }
                         case .fatal:
                             Text("We're having trouble")
-                                .font(Typography.title3.font.weight(.semibold))
+                                .font(Typography.title.font.weight(.semibold))
                                 .foregroundStyle(ColorPalette.primary.swiftUIColor)
 
                             Text("Something went wrong. Please restart Langscape.")
