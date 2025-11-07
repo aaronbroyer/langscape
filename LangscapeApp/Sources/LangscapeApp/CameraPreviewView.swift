@@ -99,7 +99,8 @@ struct CameraPreviewView: View {
             Rectangle()
                 .fill(.ultraThinMaterial)
                 .ignoresSafeArea()
-                .overlay(Color.black.opacity(0.25).ignoresSafeArea())
+                // Slightly reduce the darkening overlay for a more translucent feel
+                .overlay(Color.black.opacity(0.14).ignoresSafeArea())
 
             VStack(spacing: Spacing.large.cgFloat) {
                 LangscapeLogo(style: .full, glyphSize: 56, brand: .context)
