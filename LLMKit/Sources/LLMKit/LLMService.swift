@@ -113,8 +113,9 @@ public actor LLMService: LLMServiceProtocol {
         }
         do {
             let data = try Data(contentsOf: manifestURL)
-            let manifest = try JSONDecoder().decode(Manifest.self, from: data)
-            return try CoreMLTranslator(bundle: bundle, manifest: manifest, logger: logger)
+            // Pass a Foundation JSON object into CoreMLTranslator for schema‑agnostic decoding.
+            let json = try JSONSerialization.jsonObject(with: data, options: [])
+            return try CoreMLTranslator(bundle: bundle, manifest: json, logger: logger)
         } catch {
             Task { await logger.log("Failed to load translator manifest: \(error.localizedDescription)", level: .error, category: "LLMKit") }
             return nil

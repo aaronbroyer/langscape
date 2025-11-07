@@ -1,0 +1,404 @@
+{
+  "items": [
+    {
+      "className": "person",
+      "english": "the person",
+      "spanish": "la persona"
+    },
+    {
+      "className": "bicycle",
+      "english": "the bicycle",
+      "spanish": "the bike"
+    },
+    {
+      "className": "car",
+      "english": "the car",
+      "spanish": "el coche"
+    },
+    {
+      "className": "motorcycle",
+      "english": "the motorcycle",
+      "spanish": "la motocicleta"
+    },
+    {
+      "className": "airplane",
+      "english": "the airplane",
+      "spanish": "el avión"
+    },
+    {
+      "className": "bus",
+      "english": "the bus",
+      "spanish": "el autobús"
+    },
+    {
+      "className": "train",
+      "english": "the train",
+      "spanish": "el tren"
+    },
+    {
+      "className": "truck",
+      "english": "the truck",
+      "spanish": "el camión"
+    },
+    {
+      "className": "boat",
+      "english": "the boat",
+      "spanish": "el barco"
+    },
+    {
+      "className": "traffic light",
+      "english": "the traffic light",
+      "spanish": "el semáforo"
+    },
+    {
+      "className": "fire hydrant",
+      "english": "the fire hydrant",
+      "spanish": "la boca de incendios"
+    },
+    {
+      "className": "stop sign",
+      "english": "the stop sign",
+      "spanish": "la señal de stop"
+    },
+    {
+      "className": "parking meter",
+      "english": "the parking meter",
+      "spanish": "el parquímetro"
+    },
+    {
+      "className": "bench",
+      "english": "the bench",
+      "spanish": "el banco"
+    },
+    {
+      "className": "bird",
+      "english": "the bird",
+      "spanish": "el pájaro"
+    },
+    {
+      "className": "cat",
+      "english": "the cat",
+      "spanish": "el gato"
+    },
+    {
+      "className": "dog",
+      "english": "the dog",
+      "spanish": "el perro"
+    },
+    {
+      "className": "horse",
+      "english": "the horse",
+      "spanish": "el caballo"
+    },
+    {
+      "className": "sheep",
+      "english": "the sheep",
+      "spanish": "los ovinos"
+    },
+    {
+      "className": "cow",
+      "english": "the cow",
+      "spanish": "la vaca"
+    },
+    {
+      "className": "elephant",
+      "english": "the elephant",
+      "spanish": "el elefante"
+    },
+    {
+      "className": "bear",
+      "english": "the bear",
+      "spanish": "el oso"
+    },
+    {
+      "className": "zebra",
+      "english": "the zebra",
+      "spanish": "la cebra"
+    },
+    {
+      "className": "giraffe",
+      "english": "the giraffe",
+      "spanish": "la jirafa"
+    },
+    {
+      "className": "backpack",
+      "english": "the backpack",
+      "spanish": "la mochila"
+    },
+    {
+      "className": "umbrella",
+      "english": "the umbrella",
+      "spanish": "el paraguas"
+    },
+    {
+      "className": "handbag",
+      "english": "the handbag",
+      "spanish": "el bolso"
+    },
+    {
+      "className": "tie",
+      "english": "the tie",
+      "spanish": "el lazo"
+    },
+    {
+      "className": "suitcase",
+      "english": "the suitcase",
+      "spanish": "la maleta"
+    },
+    {
+      "className": "frisbee",
+      "english": "the frisbee",
+      "spanish": "el frisbee"
+    },
+    {
+      "className": "skis",
+      "english": "the skis",
+      "spanish": "los esquís"
+    },
+    {
+      "className": "snowboard",
+      "english": "the snowboard",
+      "spanish": "the snowboarding"
+    },
+    {
+      "className": "sports ball",
+      "english": "the sports ball",
+      "spanish": "la pelota deportiva"
+    },
+    {
+      "className": "kite",
+      "english": "the kite",
+      "spanish": "la cometa"
+    },
+    {
+      "className": "baseball bat",
+      "english": "the baseball bat",
+      "spanish": "el bate de béisbol"
+    },
+    {
+      "className": "baseball glove",
+      "english": "the baseball glove",
+      "spanish": "el guante de béisbol"
+    },
+    {
+      "className": "skateboard",
+      "english": "the skateboard",
+      "spanish": "el monopatín"
+    },
+    {
+      "className": "surfboard",
+      "english": "the surfboard",
+      "spanish": "la tabla de surf"
+    },
+    {
+      "className": "tennis racket",
+      "english": "the tennis racket",
+      "spanish": "la raqueta de tenis"
+    },
+    {
+      "className": "bottle",
+      "english": "the bottle",
+      "spanish": "el frasco"
+    },
+    {
+      "className": "wine glass",
+      "english": "the wine glass",
+      "spanish": "la copa de vino"
+    },
+    {
+      "className": "cup",
+      "english": "the cup",
+      "spanish": "la taza"
+    },
+    {
+      "className": "fork",
+      "english": "the fork",
+      "spanish": "el tenedor"
+    },
+    {
+      "className": "knife",
+      "english": "the knife",
+      "spanish": "el cuchillo"
+    },
+    {
+      "className": "spoon",
+      "english": "the spoon",
+      "spanish": "la cuchara"
+    },
+    {
+      "className": "bowl",
+      "english": "the bowl",
+      "spanish": "el tazón"
+    },
+    {
+      "className": "banana",
+      "english": "the banana",
+      "spanish": "el plátano"
+    },
+    {
+      "className": "apple",
+      "english": "the apple",
+      "spanish": "la manzana"
+    },
+    {
+      "className": "sandwich",
+      "english": "the sandwich",
+      "spanish": "el sándwich"
+    },
+    {
+      "className": "orange",
+      "english": "the orange",
+      "spanish": "la naranja"
+    },
+    {
+      "className": "broccoli",
+      "english": "the broccoli",
+      "spanish": "el brócoli"
+    },
+    {
+      "className": "carrot",
+      "english": "the carrot",
+      "spanish": "la zanahoria"
+    },
+    {
+      "className": "hot dog",
+      "english": "the hot dog",
+      "spanish": "el hot dog"
+    },
+    {
+      "className": "pizza",
+      "english": "the pizza",
+      "spanish": "la pizza"
+    },
+    {
+      "className": "donut",
+      "english": "the donut",
+      "spanish": "la rosquilla"
+    },
+    {
+      "className": "cake",
+      "english": "the cake",
+      "spanish": "el pastel"
+    },
+    {
+      "className": "chair",
+      "english": "the chair",
+      "spanish": "la silla"
+    },
+    {
+      "className": "couch",
+      "english": "the couch",
+      "spanish": "el sofá"
+    },
+    {
+      "className": "potted plant",
+      "english": "the potted plant",
+      "spanish": "la planta en maceta"
+    },
+    {
+      "className": "bed",
+      "english": "the bed",
+      "spanish": "la cama"
+    },
+    {
+      "className": "dining table",
+      "english": "the dining table",
+      "spanish": "la mesa de comedor"
+    },
+    {
+      "className": "toilet",
+      "english": "the toilet",
+      "spanish": "el inodoro"
+    },
+    {
+      "className": "tv",
+      "english": "the tv",
+      "spanish": "la televisión"
+    },
+    {
+      "className": "laptop",
+      "english": "the laptop",
+      "spanish": "el ordenador portátil"
+    },
+    {
+      "className": "mouse",
+      "english": "the mouse",
+      "spanish": "el ratón"
+    },
+    {
+      "className": "remote",
+      "english": "the remote",
+      "spanish": "el mando a distancia"
+    },
+    {
+      "className": "keyboard",
+      "english": "the keyboard",
+      "spanish": "el teclado"
+    },
+    {
+      "className": "cell phone",
+      "english": "the cell phone",
+      "spanish": "el teléfono celular"
+    },
+    {
+      "className": "microwave",
+      "english": "the microwave",
+      "spanish": "el microondas"
+    },
+    {
+      "className": "oven",
+      "english": "the oven",
+      "spanish": "el horno"
+    },
+    {
+      "className": "toaster",
+      "english": "the toaster",
+      "spanish": "la tostadora"
+    },
+    {
+      "className": "sink",
+      "english": "the sink",
+      "spanish": "el fregadero"
+    },
+    {
+      "className": "refrigerator",
+      "english": "the refrigerator",
+      "spanish": "el refrigerador"
+    },
+    {
+      "className": "book",
+      "english": "the book",
+      "spanish": "el libro"
+    },
+    {
+      "className": "clock",
+      "english": "the clock",
+      "spanish": "el reloj"
+    },
+    {
+      "className": "vase",
+      "english": "the vase",
+      "spanish": "el jarrón"
+    },
+    {
+      "className": "scissors",
+      "english": "the scissors",
+      "spanish": "las tijeras"
+    },
+    {
+      "className": "teddy bear",
+      "english": "the teddy bear",
+      "spanish": "el osito de peluche"
+    },
+    {
+      "className": "hair drier",
+      "english": "the hair drier",
+      "spanish": "el secador de pelo"
+    },
+    {
+      "className": "toothbrush",
+      "english": "the toothbrush",
+      "spanish": "el cepillo de dientes"
+    }
+  ]
+}
