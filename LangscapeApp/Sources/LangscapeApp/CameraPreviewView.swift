@@ -247,7 +247,7 @@ struct CameraPreviewView: View {
                 placedLabels: gameViewModel.placedLabels,
                 lastIncorrectLabelID: gameViewModel.lastIncorrectLabelID,
                 interactive: interactive,
-                showTargets: !interactive,
+                showTargets: true,
                 frameProvider: { frame(for: $0, in: size) },
                 attemptMatch: { labelID, objectID in
                     gameViewModel.attemptMatch(labelID: labelID, on: objectID)
@@ -573,7 +573,8 @@ private struct RoundPlayLayer: View {
                                 dropHandler: { point in
                                     guard let destinationID = destination(for: point) else { return .ignored }
                                     return attemptMatch(label.id, destinationID)
-                                }
+                                },
+                                destinationAt: { point in destination(for: point) }
                             )
                         }
                     }
@@ -624,14 +625,14 @@ private struct RoundPlayLayer: View {
             if best == nil || d < best!.distance { best = (id, d, frame) }
         }
         if let best {
-            let radius = max(44, min(best.frame.width, best.frame.height) * 0.6)
+            let radius = max(64, min(best.frame.width, best.frame.height) * 0.8)
             return best.distance <= radius ? best.id : nil
         }
         return nil
     }
 
     private func expand(frame: CGRect) -> CGRect {
-        let inset = max(24, min(frame.width, frame.height) * 0.2)
+        let inset = max(28, min(frame.width, frame.height) * 0.3)
         return frame.insetBy(dx: -inset, dy: -inset)
     }
 }
@@ -641,16 +642,18 @@ private struct DraggableToken: View {
     let state: LabelToken.VisualState
     let interactive: Bool
     let dropHandler: (CGPoint) -> LabelScrambleVM.MatchResult
+    var destinationAt: ((CGPoint) -> DetectedObject.ID?)? = nil
 
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging = false
+    @State private var isNearTarget = false
 
     var body: some View {
         GeometryReader { proxy in
             let frame = proxy.frame(in: .named("experience"))
             LabelToken(text: label.text, state: state)
                 .opacity(state == .placed ? 0 : 1)
-                .scaleEffect(isDragging ? 1.05 : 1)
+                .scaleEffect(isDragging ? (isNearTarget ? 1.08 : 1.05) : 1)
                 .offset(dragOffset)
                 .animation(.spring(response: 0.3, dampingFraction: 0.78), value: dragOffset)
                 .animation(.spring(response: 0.3, dampingFraction: 0.78), value: state)
@@ -661,6 +664,11 @@ private struct DraggableToken: View {
                             guard interactive, state != .placed else { return }
                             dragOffset = value.translation
                             isDragging = true
+                            if let dest = destinationAt {
+                                let dropPoint = CGPoint(x: frame.midX + value.translation.width,
+                                                        y: frame.midY + value.translation.height)
+                                isNearTarget = dest(dropPoint) != nil
+                            }
                         }
                         .onEnded { value in
                             guard interactive, state != .placed else { return }
@@ -668,10 +676,25 @@ private struct DraggableToken: View {
                                 x: frame.midX + value.translation.width,
                                 y: frame.midY + value.translation.height
                             )
-                            _ = dropHandler(dropPoint)
+                            let result = dropHandler(dropPoint)
+                            #if canImport(UIKit)
+                            let generator = UINotificationFeedbackGenerator()
+                            generator.prepare()
+                            switch result {
+                            case .matched:
+                                generator.notificationOccurred(.success)
+                            case .mismatched:
+                                generator.notificationOccurred(.error)
+                            case .ignored:
+                                generator.notificationOccurred(.warning)
+                            default:
+                                break
+                            }
+                            #endif
                             withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
                                 dragOffset = .zero
                                 isDragging = false
+                                isNearTarget = false
                             }
                         }
                 )
@@ -679,6 +702,7 @@ private struct DraggableToken: View {
                     if newState == .placed {
                         dragOffset = .zero
                         isDragging = false
+                        isNearTarget = false
                     }
                 }
         }
