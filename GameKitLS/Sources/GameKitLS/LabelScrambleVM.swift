@@ -26,6 +26,7 @@ public final class LabelScrambleVM: ObservableObject {
     @Published public private(set) var round: Round?
     @Published public private(set) var placedLabels: Set<Label.ID>
     @Published public private(set) var lastIncorrectLabelID: Label.ID?
+    @Published public private(set) var languagePreference: LanguagePreference
 
     public var onRoundComplete: (() -> Void)?
 
@@ -33,18 +34,25 @@ public final class LabelScrambleVM: ObservableObject {
     private let logger: Logger
     private var scanningBeganAt: Date?
     private let scanningTimeout: TimeInterval = 3.0
+    private var roundGenerationTask: Task<Void, Never>?
 
-    public init(roundGenerator: RoundGenerator = RoundGenerator(), logger: Logger = .shared) {
+    public init(
+        roundGenerator: RoundGenerator = RoundGenerator(),
+        languagePreference: LanguagePreference = .englishToSpanish,
+        logger: Logger = .shared
+    ) {
         self.roundGenerator = roundGenerator
         self.logger = logger
         self.phase = .home
         self.round = nil
         self.placedLabels = []
         self.lastIncorrectLabelID = nil
+        self.languagePreference = languagePreference
     }
 
     public func beginScanning() {
         guard phase == .home else { return }
+        roundGenerationTask?.cancel()
         placedLabels.removeAll()
         round = nil
         lastIncorrectLabelID = nil
@@ -56,25 +64,25 @@ public final class LabelScrambleVM: ObservableObject {
     public func ingestDetections(_ detections: [Detection]) {
         switch phase {
         case .scanning:
-            if let generated = roundGenerator.makeRound(from: detections) {
-                round = generated
-                placedLabels = []
-                withAnimationIfAvailable { self.phase = .ready }
-                Task { await logger.log("Round ready with \(generated.objects.count) objects", level: .info, category: "GameKitLS.LabelScrambleVM") }
-            } else if let start = scanningBeganAt, Date().timeIntervalSince(start) >= scanningTimeout {
-                // Fallback after timeout: build a round from whatever unique detections we have (up to 3)
-                let grouped = Dictionary(grouping: detections, by: { $0.label.lowercased() })
-                let unique = grouped.values.compactMap { $0.max(by: { $0.confidence < $1.confidence }) }
-                guard !unique.isEmpty else { return }
-                let capped = Array(unique.prefix(3))
-                let objects = capped.map(DetectedObject.init(from:))
-                let translator = PlaceholderLabelTranslator()
-                let labels = objects.map { Label(text: translator.translation(for: $0.sourceLabel), sourceLabel: $0.sourceLabel, objectID: $0.id) }
-                let generated = Round(objects: objects, labels: labels)
-                round = generated
-                placedLabels = []
-                withAnimationIfAvailable { self.phase = .ready }
-                Task { await logger.log("Fallback round ready with \(generated.objects.count) objects", level: .info, category: "GameKitLS.LabelScrambleVM") }
+            if roundGenerationTask != nil { return }
+            let preference = languagePreference
+            let start = scanningBeganAt
+            roundGenerationTask = Task { [weak self] in
+                guard let self else { return }
+                defer {
+                    Task { await MainActor.run { self.roundGenerationTask = nil } }
+                }
+
+                if let generated = await self.roundGenerator.makeRound(from: detections, languagePreference: preference) {
+                    await self.prepareRound(generated, logMessage: "Round ready with \(generated.objects.count) objects")
+                    return
+                }
+
+                if let start, Date().timeIntervalSince(start) >= self.scanningTimeout,
+                   let fallback = await self.roundGenerator.makeFallbackRound(from: detections, languagePreference: preference)
+                {
+                    await self.prepareRound(fallback, logMessage: "Fallback round ready with \(fallback.objects.count) objects")
+                }
             }
         case .ready:
             guard let currentRound = round else { return }
@@ -105,6 +113,7 @@ public final class LabelScrambleVM: ObservableObject {
     }
 
     public func exitToHome() {
+        roundGenerationTask?.cancel()
         withAnimationIfAvailable { self.phase = .home }
         round = nil
         placedLabels.removeAll()
@@ -141,10 +150,17 @@ public final class LabelScrambleVM: ObservableObject {
 
     public func acknowledgeCompletion() {
         guard phase == .completed else { return }
+        roundGenerationTask?.cancel()
         round = nil
         placedLabels.removeAll()
         lastIncorrectLabelID = nil
         withAnimationIfAvailable { self.phase = .home }
+    }
+
+    public func updateLanguagePreference(_ preference: LanguagePreference) {
+        guard languagePreference != preference else { return }
+        languagePreference = preference
+        Task { await logger.log("Updated language preference to \(preference.rawValue)", level: .info, category: "GameKitLS.LabelScrambleVM") }
     }
 
     private func scheduleIncorrectReset(for labelID: Label.ID) {
@@ -157,6 +173,23 @@ public final class LabelScrambleVM: ObservableObject {
                 }
             }
         }
+}
+
+private extension LabelScrambleVM {
+    func prepareRound(_ generated: Round, logMessage: String) async {
+        if Task.isCancelled { return }
+        var didPrepare = false
+        await MainActor.run {
+            guard self.phase == .scanning else { return }
+            self.round = generated
+            self.placedLabels = []
+            self.lastIncorrectLabelID = nil
+            withAnimationIfAvailable { self.phase = .ready }
+            didPrepare = true
+        }
+        guard didPrepare else { return }
+        Task { await logger.log(logMessage, level: .info, category: "GameKitLS.LabelScrambleVM") }
+    }
 }
 }
 
