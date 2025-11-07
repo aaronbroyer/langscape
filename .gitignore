@@ -10,7 +10,10 @@ xcuserdata/
 
 .venv*
 
-yolov8n.pt
+# Ultralytics exports at repo root 
+/yolov8*.pt
+/yolov8*.mlpackage/
+runs*/
 
 # Python artifacts
 __pycache__/
