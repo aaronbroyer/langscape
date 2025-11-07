@@ -29,28 +29,7 @@ public struct LangscapeLogo: View {
     // MARK: - Elements
 
     private var glyph: some View {
-        // Minimal translation motif: rounded square outline with divider and “A | 文” pair.
-        ZStack {
-            RoundedRectangle(cornerRadius: glyphSize * 0.24, style: .continuous)
-                .stroke(tint, lineWidth: max(1, glyphSize * 0.06))
-
-            // Divider
-            Capsule()
-                .fill(tint)
-                .frame(width: max(1, glyphSize * 0.06), height: glyphSize * 0.58)
-
-            // A | 文 monogram
-            HStack(spacing: glyphSize * 0.14) {
-                Text("A")
-                    .font(.system(size: glyphSize * 0.46, weight: .semibold, design: .rounded))
-                    .foregroundStyle(tint)
-                Text("文")
-                    .font(.system(size: glyphSize * 0.46, weight: .semibold, design: .rounded))
-                    .foregroundStyle(tint)
-            }
-        }
-        .frame(width: glyphSize, height: glyphSize)
-        .drawingGroup()
+        GlobeChatMark(size: glyphSize, tint: tint)
     }
 
     private var wordmark: some View {
@@ -58,5 +37,56 @@ public struct LangscapeLogo: View {
             .font(.system(size: glyphSize * 0.5, weight: .semibold, design: .rounded))
             .kerning(0.5)
             .foregroundStyle(tint)
+    }
+}
+
+// MARK: - Globe + Chat bubble mark
+
+fileprivate struct GlobeChatMark: View {
+    let size: CGFloat
+    let tint: Color
+    var lineWidth: CGFloat { max(1.25, size * 0.07) }
+
+    var body: some View {
+        ZStack {
+            // Outer circle
+            Circle()
+                .stroke(tint, lineWidth: lineWidth)
+
+            // Parallels and meridians clipped to circle
+            ZStack {
+                // Equator
+                Rectangle()
+                    .fill(tint)
+                    .frame(height: lineWidth)
+
+                // Parallels (top/bottom)
+                Path(ellipseIn: CGRect(x: size * 0.12, y: size * 0.27, width: size * 0.76, height: size * 0.46))
+                    .stroke(tint, lineWidth: lineWidth)
+                Path(ellipseIn: CGRect(x: size * 0.12, y: size * 0.27, width: size * 0.76, height: size * 0.46))
+                    .rotation(Angle(degrees: 180))
+                    .stroke(tint, lineWidth: lineWidth)
+
+                // Meridians (left/right)
+                Path(ellipseIn: CGRect(x: size * 0.25, y: size * 0.08, width: size * 0.50, height: size * 0.84))
+                    .stroke(tint, lineWidth: lineWidth)
+                Path(ellipseIn: CGRect(x: size * 0.25, y: size * 0.08, width: size * 0.50, height: size * 0.84))
+                    .rotation(Angle(degrees: 180))
+                    .stroke(tint, lineWidth: lineWidth)
+            }
+            .clipShape(Circle().inset(by: lineWidth * 0.5))
+
+            // Chat tail (minimal, attached to lower-right)
+            Path { p in
+                let r = size / 2
+                p.move(to: CGPoint(x: r * 1.15, y: r * 1.10))
+                p.addLine(to: CGPoint(x: r * 1.55, y: r * 1.42))
+                p.addLine(to: CGPoint(x: r * 0.98, y: r * 1.42))
+                p.closeSubpath()
+            }
+            .fill(tint)
+        }
+        .frame(width: size, height: size)
+        .drawingGroup()
     }
 }
