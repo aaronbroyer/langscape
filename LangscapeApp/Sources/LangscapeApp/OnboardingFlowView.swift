@@ -12,20 +12,22 @@ struct OnboardingFlowView: View {
         Group {
             switch viewModel.step {
             case .splash:
-                VStack(spacing: 24) {
-                    LangscapeLogo(style: .full, glyphSize: 64)
-                    Button("Get Started") { viewModel.advanceFromSplash() }
-                        .buttonStyle(.borderedProminent)
+                VStack(spacing: 28) {
+                    LangscapeLogo(style: .full, glyphSize: 68)
+                    CTAButton("Get Started", systemImage: "viewfinder") {
+                        viewModel.advanceFromSplash()
+                    }
                 }
                 .padding()
             case .slides:
-                VStack(spacing: 20) {
-                    LangscapeLogo(style: .mark, glyphSize: 52)
+                VStack(spacing: 22) {
+                    LangscapeLogo(style: .mark, glyphSize: 56)
                     Text("Learn by labeling what you see.")
                         .font(.title2)
                         .multilineTextAlignment(.center)
-                    Button("Choose Language") { viewModel.showLanguageSelection() }
-                        .buttonStyle(.borderedProminent)
+                    CTAButton("Choose Language", systemImage: "character.book.closed") {
+                        viewModel.showLanguageSelection()
+                    }
                 }
                 .padding()
             case .languageSelection:
@@ -37,17 +39,16 @@ struct OnboardingFlowView: View {
                 }
                 .padding()
             case .cameraPermission:
-                VStack(spacing: 20) {
-                    LangscapeLogo(style: .mark, glyphSize: 52)
+                VStack(spacing: 22) {
+                    LangscapeLogo(style: .mark, glyphSize: 56)
                     Text("Camera Access")
                         .font(.title2)
                     Text("We use the camera to detect objects for activities.")
                         .multilineTextAlignment(.center)
-                    Button("Continue") {
+                    CTAButton("Continue", systemImage: "camera.viewfinder") {
                         viewModel.completeOnboarding()
                         onComplete()
                     }
-                    .buttonStyle(.borderedProminent)
                 }
                 .padding()
             case .done:
