@@ -11,3 +11,17 @@ xcuserdata/
 .venv*
 
 yolov8n.pt
+
+# Python artifacts
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Temporary scripts/downloads
+Scripts/tmp/
+
+# Local translation exports (generated, not shipped)
+LLMKit/Resources/hf_*/
+LLMKit/Resources/marian_*/
