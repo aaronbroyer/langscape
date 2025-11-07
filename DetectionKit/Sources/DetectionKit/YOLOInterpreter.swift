@@ -22,6 +22,8 @@ public actor YOLOInterpreter: DetectionService {
 
     private let logger: Logger
     private var backend: Backend = .mock
+    private let confidenceThreshold: Double = 0.35
+    private let maxDetections: Int = 25
     private var isPrepared = false
 
     public init(logger: Logger = .shared) {
@@ -99,18 +101,19 @@ public actor YOLOInterpreter: DetectionService {
             }
 
             let results = (request.results as? [VNRecognizedObjectObservation]) ?? []
-            return results.flatMap { obs -> [Detection] in
-                let top = obs.labels.max(by: { $0.confidence < $1.confidence })
-                guard let label = top?.identifier else { return [] }
-                let confidence = Double(top?.confidence ?? 0)
-                // Vision's boundingBox is normalized with origin at bottom-left.
+            let filtered = results.compactMap { obs -> Detection? in
+                guard let best = obs.labels.max(by: { $0.confidence < $1.confidence }) else { return nil }
+                let confidence = Double(best.confidence)
+                guard confidence >= confidenceThreshold else { return nil }
                 let r = obs.boundingBox
                 let normalized = NormalizedRect(
                     origin: .init(x: Double(r.origin.x), y: Double(1 - r.origin.y - r.size.height)),
                     size: .init(width: Double(r.size.width), height: Double(r.size.height))
                 )
-                return [Detection(label: label, confidence: confidence, boundingBox: normalized)]
+                return Detection(label: best.identifier, confidence: confidence, boundingBox: normalized)
             }
+            .sorted(by: { $0.confidence > $1.confidence })
+            return Array(filtered.prefix(maxDetections))
         #endif
         }
     }

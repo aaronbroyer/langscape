@@ -103,6 +103,7 @@ public protocol RoundGenerating: Sendable {
 public struct RoundGenerator: RoundGenerating {
     public let minimumObjectCount: Int
     public let maximumObjectCount: Int
+    public let minConfidence: Double
 
     private let labelProvider: any LabelProviding
     private let logger: Logger
@@ -111,16 +112,19 @@ public struct RoundGenerator: RoundGenerating {
         minimumObjectCount: Int = 3,
         maximumObjectCount: Int = 6,
         labelProvider: any LabelProviding = LabelEngine(),
+        minConfidence: Double = 0.5,
         logger: Logger = .shared
     ) {
         self.minimumObjectCount = minimumObjectCount
         self.maximumObjectCount = max(minimumObjectCount, maximumObjectCount)
         self.labelProvider = labelProvider
+        self.minConfidence = minConfidence
         self.logger = logger
     }
 
     public func makeRound(from detections: [Detection], languagePreference: LanguagePreference) async -> Round? {
-        let deduplicated = deduplicate(detections: detections)
+        let confident = detections.filter { $0.confidence >= minConfidence }
+        let deduplicated = deduplicate(detections: confident)
         guard deduplicated.count >= minimumObjectCount else {
             Task { await logger.log("Insufficient detections for round", level: .debug, category: "GameKitLS.RoundGenerator") }
             return nil
@@ -138,7 +142,7 @@ public struct RoundGenerator: RoundGenerating {
     }
 
     public func makeFallbackRound(from detections: [Detection], languagePreference: LanguagePreference) async -> Round? {
-        let grouped = Dictionary(grouping: detections, by: { $0.label.lowercased() })
+        let grouped = Dictionary(grouping: detections.filter { $0.confidence >= minConfidence * 0.8 }, by: { $0.label.lowercased() })
         let unique = grouped.values.compactMap { $0.max(by: { $0.confidence < $1.confidence }) }
         guard !unique.isEmpty else { return nil }
 
@@ -156,6 +160,12 @@ public struct RoundGenerator: RoundGenerating {
         for detection in detections {
             let key = detection.label.lowercased()
             guard !seen.contains(key) else { continue }
+            // Filter out tiny or extreme aspect boxes which are hard to target
+            let w = detection.boundingBox.size.width
+            let h = detection.boundingBox.size.height
+            let area = w * h
+            let aspect = max(w, h) / max(0.0001, min(w, h))
+            guard area >= 0.012 && aspect <= 4.5 else { continue }
             seen.insert(key)
             results.append(detection)
         }

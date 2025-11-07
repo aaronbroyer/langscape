@@ -163,6 +163,12 @@ public final class DetectionVM: ObservableObject {
 private actor DetectionProcessor {
     private let service: any DetectionService
     private var prepared = false
+    // Temporal smoothing state
+    private var tracks: [UUID: Track] = [:]
+    private let iouThreshold: Double = 0.25
+    private let requiredHits: Int = 2
+    private let maxTrackAge: TimeInterval = 0.6
+    private let smoothingAlpha: Double = 0.6 // EMA for bbox/confidence
 
     init(service: any DetectionService) {
         self.service = service
@@ -173,6 +179,86 @@ private actor DetectionProcessor {
             try await service.prepare()
             prepared = true
         }
-        return try await service.detect(on: request)
+        let raw = try await service.detect(on: request)
+        let stabilized = stabilize(detections: raw, timestamp: request.timestamp)
+        return stabilized
+    }
+
+    // MARK: - Stabilization
+    private struct Track {
+        let id: UUID
+        let label: String
+        var bbox: NormalizedRect
+        var confidence: Double
+        var hits: Int
+        var lastTimestamp: Date
+    }
+
+    private func stabilize(detections: [Detection], timestamp: Date) -> [Detection] {
+        // Step 1: Associate detections to existing tracks by label + IoU
+        var unmatchedTrackIDs = Set(tracks.keys)
+
+        for det in detections {
+            // Find best matching track with same label
+            var bestID: UUID?
+            var bestIoU: Double = 0
+            for (id, tr) in tracks where tr.label.caseInsensitiveCompare(det.label) == .orderedSame {
+                let iou = iou(tr.bbox, det.boundingBox)
+                if iou > bestIoU { bestIoU = iou; bestID = id }
+            }
+
+            if let id = bestID, bestIoU >= iouThreshold, var tr = tracks[id] {
+                // EMA update
+                tr.bbox = emaBBox(old: tr.bbox, new: det.boundingBox, alpha: smoothingAlpha)
+                tr.confidence = tr.confidence * (1 - smoothingAlpha) + det.confidence * smoothingAlpha
+                tr.hits += 1
+                tr.lastTimestamp = timestamp
+                tracks[id] = tr
+                unmatchedTrackIDs.remove(id)
+            } else {
+                // New track
+                let id = det.id
+                tracks[id] = Track(id: id, label: det.label, bbox: det.boundingBox, confidence: det.confidence, hits: 1, lastTimestamp: timestamp)
+            }
+        }
+
+        // Step 2: Age/prune unmatched tracks
+        for id in unmatchedTrackIDs {
+            if let tr = tracks[id], timestamp.timeIntervalSince(tr.lastTimestamp) > maxTrackAge {
+                tracks.removeValue(forKey: id)
+            }
+        }
+
+        // Step 3: Emit stable tracks only
+        let stable = tracks.values.filter { tr in
+            tr.hits >= requiredHits && timestamp.timeIntervalSince(tr.lastTimestamp) <= maxTrackAge
+        }
+        .sorted(by: { $0.confidence > $1.confidence })
+
+        return stable.map { tr in
+            Detection(id: tr.id, label: tr.label, confidence: tr.confidence, boundingBox: tr.bbox)
+        }
+    }
+
+    private func emaBBox(old: NormalizedRect, new: NormalizedRect, alpha: Double) -> NormalizedRect {
+        func lerp(_ a: Double, _ b: Double) -> Double { a * (1 - alpha) + b * alpha }
+        return NormalizedRect(
+            origin: .init(x: lerp(old.origin.x, new.origin.x), y: lerp(old.origin.y, new.origin.y)),
+            size: .init(width: lerp(old.size.width, new.size.width), height: lerp(old.size.height, new.size.height))
+        )
+    }
+
+    private func iou(_ a: NormalizedRect, _ b: NormalizedRect) -> Double {
+        let ax2 = a.origin.x + a.size.width
+        let ay2 = a.origin.y + a.size.height
+        let bx2 = b.origin.x + b.size.width
+        let by2 = b.origin.y + b.size.height
+        let ix = max(0, min(ax2, bx2) - max(a.origin.x, b.origin.x))
+        let iy = max(0, min(ay2, by2) - max(a.origin.y, b.origin.y))
+        let inter = ix * iy
+        let areaA = a.size.width * a.size.height
+        let areaB = b.size.width * b.size.height
+        let uni = max(areaA + areaB - inter, 1e-9)
+        return inter / uni
     }
 }
