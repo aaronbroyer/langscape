@@ -1,5 +1,11 @@
 import SwiftUI
 import DesignSystem
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 public struct LangscapeLogo: View {
     public enum Style { case full, mark }
@@ -34,6 +40,7 @@ public struct LangscapeLogo: View {
 
     // MARK: - Elements
 
+    @ViewBuilder
     private var glyph: some View {
         if let name = assetName, let image = Self.loadImage(named: name) {
             image
