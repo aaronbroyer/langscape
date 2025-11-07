@@ -91,9 +91,7 @@ struct CameraPreviewView: View {
                 .overlay(Color.black.opacity(0.25).ignoresSafeArea())
 
             VStack(spacing: Spacing.large.cgFloat) {
-                Text("Langscape")
-                    .font(Typography.title.font.weight(.bold))
-                    .foregroundStyle(ColorPalette.primary.swiftUIColor)
+                LangscapeLogo(style: .full, glyphSize: 56)
                     .shadow(color: Color.black.opacity(0.35), radius: 14, x: 0, y: 8)
                     .padding(.top, Spacing.xLarge.cgFloat * 1.4)
 
