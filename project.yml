@@ -1,0 +1,46 @@
+name: Langscape
+packages:
+  DesignSystem:
+    path: DesignSystem
+  UIComponents:
+    path: UIComponents
+  Utilities:
+    path: Utilities
+  DetectionKit:
+    path: DetectionKit
+  GameKitLS:
+    path: GameKitLS
+  VocabStore:
+    path: VocabStore
+  LLMKit:
+    path: LLMKit
+
+targets:
+  Langscape:
+    type: application
+    platform: iOS
+    sources:
+      - LangscapeApp/Sources/LangscapeApp
+    info:
+      path: LangscapeApp/Info.plist
+    dependencies:
+      - package: DesignSystem
+        product: DesignSystem
+      - package: UIComponents
+        product: UIComponents
+      - package: Utilities
+        product: Utilities
+      - package: DetectionKit
+        product: DetectionKit
+      - package: GameKitLS
+        product: GameKitLS
+      - package: VocabStore
+        product: VocabStore
+      - package: LLMKit
+        product: LLMKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.langscape.app
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        IPHONEOS_DEPLOYMENT_TARGET: 17.0

@@ -29,18 +29,27 @@ public struct FontDescriptor: Equatable, Sendable {
     }
 }
 
-public struct CGFloatValue: Equatable, Sendable {
+public struct CGFloatValue: Equatable, Sendable, ExpressibleByIntegerLiteral, ExpressibleByFloatLiteral {
     public let rawValue: Double
 
     public init(_ rawValue: Double) {
         self.rawValue = rawValue
+    }
+
+    // Allow numeric literals (e.g., 34, 17.0) where CGFloatValue is expected
+    public init(integerLiteral value: IntegerLiteralType) {
+        self.rawValue = Double(value)
+    }
+
+    public init(floatLiteral value: FloatLiteralType) {
+        self.rawValue = value
     }
 }
 
 #if canImport(SwiftUI)
 public extension FontDescriptor {
     var font: Font {
-        Font.system(size: size.rawValue, weight: weight.fontWeight)
+        Font.system(size: CGFloat(size.rawValue), weight: weight.fontWeight)
     }
 }
 
