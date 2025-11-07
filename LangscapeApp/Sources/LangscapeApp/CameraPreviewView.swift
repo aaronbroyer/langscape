@@ -1,0 +1,193 @@
+#if canImport(SwiftUI) && canImport(AVFoundation)
+import SwiftUI
+import AVFoundation
+import DetectionKit
+import Utilities
+#if canImport(UIKit)
+import UIKit
+#endif
+
+struct CameraPreviewView: View {
+    @ObservedObject var viewModel: DetectionVM
+    @StateObject private var controller = CameraSessionController()
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .topLeading) {
+                CameraPreviewLayer(session: controller.session)
+                    .ignoresSafeArea()
+
+                detectionOverlay(in: proxy.size)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("FPS: \(viewModel.fps, specifier: "%.1f")")
+                        .font(.headline)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(Color.white)
+
+                    if let error = viewModel.lastError {
+                        Text(error.errorDescription)
+                            .font(.footnote)
+                            .padding(8)
+                            .background(.red.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
+                            .foregroundStyle(Color.white)
+                    }
+
+                    Spacer()
+                }
+                .padding()
+            }
+            .background(Color.black)
+            .task {
+                await controller.setViewModel(viewModel)
+                controller.startSession()
+            }
+            .onDisappear {
+                controller.stopSession()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func detectionOverlay(in size: CGSize) -> some View {
+        ZStack {
+            ForEach(viewModel.detections) { detection in
+                let rect = detection.boundingBox.rect(in: size)
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Color.green, lineWidth: 2)
+                    .frame(width: rect.width, height: rect.height)
+                    .position(x: rect.midX, y: rect.midY)
+                    .overlay(alignment: .topLeading) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(detection.label)
+                                .font(.caption)
+                                .bold()
+                            Text("\(Int(detection.confidence * 100))%")
+                                .font(.caption2)
+                        }
+                        .padding(6)
+                        .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
+                        .foregroundStyle(Color.white)
+                        .offset(x: 4, y: 4)
+                    }
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+}
+
+private struct CameraPreviewLayer: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    func makeUIView(context: Context) -> PreviewView {
+        let view = PreviewView()
+        view.videoPreviewLayer.session = session
+        return view
+    }
+
+    func updateUIView(_ uiView: PreviewView, context: Context) {
+        uiView.videoPreviewLayer.session = session
+    }
+
+    final class PreviewView: UIView {
+        override static var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+
+        var videoPreviewLayer: AVCaptureVideoPreviewLayer {
+            // swiftlint:disable:next force_cast
+            layer as! AVCaptureVideoPreviewLayer
+        }
+    }
+}
+
+@MainActor
+private final class CameraSessionController: NSObject, ObservableObject {
+    let session = AVCaptureSession()
+
+    private let logger = Logger.shared
+    private let sessionQueue = DispatchQueue(label: "CameraSessionController.queue")
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private weak var viewModel: DetectionVM?
+    private var isConfigured = false
+
+    func setViewModel(_ viewModel: DetectionVM) async {
+        self.viewModel = viewModel
+        await logger.log("Camera view model attached", level: .info, category: "LangscapeApp.Camera")
+    }
+
+    func startSession() {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if !self.isConfigured {
+                self.configureSession()
+                self.isConfigured = true
+            }
+            if !self.session.isRunning {
+                self.session.startRunning()
+                Task { await self.logger.log("AVCaptureSession started", level: .info, category: "LangscapeApp.Camera") }
+            }
+        }
+    }
+
+    func stopSession() {
+        sessionQueue.async { [weak self] in
+            guard let self, self.session.isRunning else { return }
+            self.session.stopRunning()
+            Task { await self.logger.log("AVCaptureSession stopped", level: .info, category: "LangscapeApp.Camera") }
+        }
+    }
+
+    private func configureSession() {
+        session.beginConfiguration()
+        session.sessionPreset = .high
+
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+            Task { await logger.log("No camera device available", level: .error, category: "LangscapeApp.Camera") }
+            session.commitConfiguration()
+            return
+        }
+
+        do {
+            let input = try AVCaptureDeviceInput(device: device)
+            if session.canAddInput(input) {
+                session.addInput(input)
+            }
+        } catch {
+            Task { await logger.log("Failed to create camera input: \(error.localizedDescription)", level: .error, category: "LangscapeApp.Camera") }
+        }
+
+        videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+
+        if session.canAddOutput(videoOutput) {
+            session.addOutput(videoOutput)
+        }
+
+        videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)
+        session.commitConfiguration()
+
+        Task { await logger.log("Camera session configured", level: .info, category: "LangscapeApp.Camera") }
+    }
+}
+
+extension CameraSessionController: AVCaptureVideoDataOutputSampleBufferDelegate {
+    nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let request = DetectionRequest(timestamp: Date(), pixelBuffer: pixelBuffer)
+        Task { [weak viewModel] in
+            await viewModel?.enqueue(request)
+        }
+    }
+}
+
+private extension NormalizedRect {
+    func rect(in size: CGSize) -> CGRect {
+        let width = CGFloat(self.size.width) * size.width
+        let height = CGFloat(self.size.height) * size.height
+        let x = CGFloat(origin.x) * size.width
+        let y = CGFloat(origin.y) * size.height
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+}
+#endif
