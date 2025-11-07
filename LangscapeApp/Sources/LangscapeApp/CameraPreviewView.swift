@@ -20,25 +20,27 @@ struct CameraPreviewView: View {
                 detectionOverlay(in: proxy.size)
 
                 #if DEBUG
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("FPS: \(viewModel.fps, specifier: "%.1f")")
-                        .font(.headline)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
-                        .foregroundStyle(Color.white)
-
-                    if let error = viewModel.lastError {
-                        Text(error.errorDescription)
-                            .font(.footnote)
-                            .padding(8)
-                            .background(.red.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
+                if ProcessInfo.processInfo.environment["SHOW_HUD"] == "1" {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("FPS: \(viewModel.fps, specifier: "%.1f")")
+                            .font(.headline)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
                             .foregroundStyle(Color.white)
-                    }
 
-                    Spacer()
+                        if let error = viewModel.lastError {
+                            Text(error.errorDescription)
+                                .font(.footnote)
+                                .padding(8)
+                                .background(.red.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
+                                .foregroundStyle(Color.white)
+                        }
+
+                        Spacer()
+                    }
+                    .padding()
                 }
-                .padding()
                 #endif
             }
             .background(Color.black)
