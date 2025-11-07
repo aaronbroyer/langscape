@@ -22,24 +22,31 @@ public final class LabelScrambleVM: ObservableObject {
         case ignored
     }
 
+    public enum Overlay: Equatable {
+        case noObjects
+        case fatal
+    }
+
     @Published public private(set) var phase: Phase
     @Published public private(set) var round: Round?
     @Published public private(set) var placedLabels: Set<Label.ID>
     @Published public private(set) var lastIncorrectLabelID: Label.ID?
     @Published public private(set) var languagePreference: LanguagePreference
+    @Published public private(set) var overlay: Overlay?
 
     public var onRoundComplete: (() -> Void)?
 
-    private let roundGenerator: RoundGenerator
+    private let roundGenerator: any RoundGenerating
     private let logger: Logger
     private var scanningBeganAt: Date?
-    private let scanningTimeout: TimeInterval = 3.0
+    private let scanningTimeout: TimeInterval
     private var roundGenerationTask: Task<Void, Never>?
 
     public init(
-        roundGenerator: RoundGenerator = RoundGenerator(),
+        roundGenerator: any RoundGenerating = RoundGenerator(),
         languagePreference: LanguagePreference = .englishToSpanish,
-        logger: Logger = .shared
+        logger: Logger = .shared,
+        scanningTimeout: TimeInterval = 3.0
     ) {
         self.roundGenerator = roundGenerator
         self.logger = logger
@@ -48,14 +55,17 @@ public final class LabelScrambleVM: ObservableObject {
         self.placedLabels = []
         self.lastIncorrectLabelID = nil
         self.languagePreference = languagePreference
+        self.overlay = nil
+        self.scanningTimeout = scanningTimeout
     }
 
     public func beginScanning() {
-        guard phase == .home else { return }
+        guard phase == .home, overlay != .fatal else { return }
         roundGenerationTask?.cancel()
         placedLabels.removeAll()
         round = nil
         lastIncorrectLabelID = nil
+        overlay = nil
         scanningBeganAt = Date()
         withAnimationIfAvailable { self.phase = .scanning }
         Task { await logger.log("Entered scanning phase", level: .info, category: "GameKitLS.LabelScrambleVM") }
@@ -78,10 +88,22 @@ public final class LabelScrambleVM: ObservableObject {
                     return
                 }
 
-                if let start, Date().timeIntervalSince(start) >= self.scanningTimeout,
-                   let fallback = await self.roundGenerator.makeFallbackRound(from: detections, languagePreference: preference)
-                {
-                    await self.prepareRound(fallback, logMessage: "Fallback round ready with \(fallback.objects.count) objects")
+                if let start {
+                    let elapsed = Date().timeIntervalSince(start)
+                    let remaining = max(self.scanningTimeout - elapsed, 0)
+                    if remaining > 0 {
+                        let nanos = UInt64((remaining * 1_000_000_000).rounded())
+                        if nanos > 0 {
+                            try? await Task.sleep(nanoseconds: nanos)
+                        }
+                    }
+                    if Task.isCancelled { return }
+
+                    if let fallback = await self.roundGenerator.makeFallbackRound(from: detections, languagePreference: preference) {
+                        await self.prepareRound(fallback, logMessage: "Fallback round ready with \(fallback.objects.count) objects")
+                    } else {
+                        await self.presentNoObjectsDetected()
+                    }
                 }
             }
         case .ready:
@@ -118,6 +140,10 @@ public final class LabelScrambleVM: ObservableObject {
         round = nil
         placedLabels.removeAll()
         lastIncorrectLabelID = nil
+        scanningBeganAt = nil
+        if overlay != .fatal {
+            overlay = nil
+        }
         Task { await logger.log("Returned to home", level: .info, category: "GameKitLS.LabelScrambleVM") }
     }
 
@@ -154,6 +180,7 @@ public final class LabelScrambleVM: ObservableObject {
         round = nil
         placedLabels.removeAll()
         lastIncorrectLabelID = nil
+        scanningBeganAt = nil
         withAnimationIfAvailable { self.phase = .home }
     }
 
@@ -161,6 +188,24 @@ public final class LabelScrambleVM: ObservableObject {
         guard languagePreference != preference else { return }
         languagePreference = preference
         Task { await logger.log("Updated language preference to \(preference.rawValue)", level: .info, category: "GameKitLS.LabelScrambleVM") }
+    }
+
+    public func retryAfterNoObjects() {
+        guard overlay == .noObjects else { return }
+        overlay = nil
+        beginScanning()
+    }
+
+    public func presentFatalError() {
+        guard overlay != .fatal else { return }
+        roundGenerationTask?.cancel()
+        round = nil
+        placedLabels.removeAll()
+        lastIncorrectLabelID = nil
+        scanningBeganAt = nil
+        overlay = .fatal
+        withAnimationIfAvailable { self.phase = .home }
+        Task { await logger.log("Presenting fatal error overlay", level: .error, category: "GameKitLS.LabelScrambleVM") }
     }
 
     private func scheduleIncorrectReset(for labelID: Label.ID) {
@@ -187,6 +232,18 @@ public final class LabelScrambleVM: ObservableObject {
         }
         guard didPrepare else { return }
         Task { await logger.log(logMessage, level: .info, category: "GameKitLS.LabelScrambleVM") }
+    }
+
+    private func presentNoObjectsDetected() async {
+        await MainActor.run {
+            guard self.phase == .scanning, self.overlay != .fatal else { return }
+            self.round = nil
+            self.placedLabels.removeAll()
+            self.lastIncorrectLabelID = nil
+            self.overlay = .noObjects
+            withAnimationIfAvailable { self.phase = .home }
+        }
+        Task { await logger.log("No objects detected after timeout", level: .warning, category: "GameKitLS.LabelScrambleVM") }
     }
 }
 

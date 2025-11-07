@@ -50,6 +50,11 @@ struct CameraPreviewView: View {
                 gameViewModel.ingestDetections(newDetections)
             }
             .onChange(of: gameViewModel.phase, perform: handlePhaseChange)
+            .onChange(of: viewModel.lastError) { error in
+                if error != nil {
+                    gameViewModel.presentFatalError()
+                }
+            }
         }
     }
 
@@ -73,14 +78,20 @@ struct CameraPreviewView: View {
                 EmptyView()
             }
 
-            if gameViewModel.phase == .paused {
+            if gameViewModel.phase == .paused && gameViewModel.overlay == nil {
                 Color.black.opacity(0.35)
                     .ignoresSafeArea()
 
                 PauseOverlay(resumeAction: gameViewModel.resume, exitAction: exitToHome)
                     .transition(.scale.combined(with: .opacity))
             }
+
+            if let overlay = gameViewModel.overlay {
+                blockingOverlay(for: overlay)
+                    .transition(.opacity.combined(with: .scale))
+            }
         }
+        .animation(.spring(response: 0.45, dampingFraction: 0.86), value: gameViewModel.overlay)
     }
 
     private var homeOverlay: some View {
@@ -132,6 +143,56 @@ struct CameraPreviewView: View {
             }
             .padding(.bottom, Spacing.xLarge.cgFloat * 2.2)
         }
+    }
+
+    @ViewBuilder
+    private func blockingOverlay(for overlay: LabelScrambleVM.Overlay) -> some View {
+        ZStack {
+            Color.black.opacity(0.55)
+                .ignoresSafeArea()
+
+            VStack {
+                Spacer()
+
+                TranslucentPanel(cornerRadius: 32) {
+                    VStack(spacing: Spacing.medium.cgFloat) {
+                        LangscapeLogo(style: .mark, glyphSize: 56)
+                            .shadow(color: Color.black.opacity(0.25), radius: 12, x: 0, y: 6)
+
+                        switch overlay {
+                        case .noObjects:
+                            Text("No objects detected")
+                                .font(Typography.title3.font.weight(.semibold))
+                                .foregroundStyle(ColorPalette.primary.swiftUIColor)
+
+                            Text("Try pointing your camera at a scene with more objects.")
+                                .font(Typography.body.font)
+                                .foregroundStyle(ColorPalette.primary.swiftUIColor.opacity(0.8))
+                                .multilineTextAlignment(.center)
+
+                            PrimaryButton(title: "Retry") {
+                                gameViewModel.retryAfterNoObjects()
+                            }
+                        case .fatal:
+                            Text("We're having trouble")
+                                .font(Typography.title3.font.weight(.semibold))
+                                .foregroundStyle(ColorPalette.primary.swiftUIColor)
+
+                            Text("Something went wrong. Please restart Langscape.")
+                                .font(Typography.body.font)
+                                .foregroundStyle(ColorPalette.primary.swiftUIColor.opacity(0.8))
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    .padding(.horizontal, Spacing.large.cgFloat)
+                    .padding(.vertical, Spacing.large.cgFloat)
+                }
+                .padding(.horizontal, Spacing.large.cgFloat)
+
+                Spacer()
+            }
+        }
+        .allowsHitTesting(true)
     }
 
     private var scanningIndicator: some View {
@@ -380,6 +441,12 @@ private final class CameraSessionController: NSObject, ObservableObject {
 
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
             Task { await logger.log("No camera device available", level: .error, category: "LangscapeApp.Camera") }
+            Task { @MainActor [weak self] in
+                self?.viewModel?.registerFatalError(
+                    "Camera hardware unavailable.",
+                    metadata: ["stage": "camera_device"]
+                )
+            }
             session.commitConfiguration()
             return
         }
@@ -391,6 +458,15 @@ private final class CameraSessionController: NSObject, ObservableObject {
             }
         } catch {
             Task { await logger.log("Failed to create camera input: \(error.localizedDescription)", level: .error, category: "LangscapeApp.Camera") }
+            Task { @MainActor [weak self] in
+                self?.viewModel?.registerFatalError(
+                    "Failed to create camera input.",
+                    metadata: [
+                        "stage": "camera_input",
+                        "error": error.localizedDescription
+                    ]
+                )
+            }
         }
 
         videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
@@ -398,6 +474,14 @@ private final class CameraSessionController: NSObject, ObservableObject {
 
         if session.canAddOutput(videoOutput) {
             session.addOutput(videoOutput)
+        } else {
+            Task { await logger.log("Unable to add video output to session", level: .error, category: "LangscapeApp.Camera") }
+            Task { @MainActor [weak self] in
+                self?.viewModel?.registerFatalError(
+                    "Camera output configuration failed.",
+                    metadata: ["stage": "camera_output"]
+                )
+            }
         }
 
         videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)

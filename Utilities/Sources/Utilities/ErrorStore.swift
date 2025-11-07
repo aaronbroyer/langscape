@@ -15,6 +15,8 @@ public struct LoggedError: Identifiable, Equatable, Sendable {
 }
 
 public actor ErrorStore {
+    public static let shared = ErrorStore()
+
     public let capacity: Int
     private var errors: [LoggedError]
 
