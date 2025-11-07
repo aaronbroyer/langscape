@@ -144,7 +144,7 @@ public final class LabelScrambleVM: ObservableObject {
 
 private func withAnimationIfAvailable(_ updates: @escaping () -> Void) {
     #if canImport(SwiftUI)
-    SwiftUI.withAnimation(updates)
+    SwiftUI.withAnimation { updates() }
     #else
     updates()
     #endif
