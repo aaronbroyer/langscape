@@ -2,32 +2,114 @@ import Foundation
 import Utilities
 
 public actor VocabularyStore {
-    public struct Entry: Identifiable, Equatable, Sendable {
+    public struct Entry: Identifiable, Equatable, Codable, Sendable {
         public let id: UUID
-        public let phrase: String
-        public let translation: String
+        public let className: String
+        public let english: String
+        public let spanish: String
 
-        public init(id: UUID = UUID(), phrase: String, translation: String) {
+        public init(id: UUID = UUID(), className: String, english: String, spanish: String) {
             self.id = id
-            self.phrase = phrase
-            self.translation = translation
+            self.className = className
+            self.english = english
+            self.spanish = spanish
+        }
+
+        fileprivate var normalizedClassName: String {
+            className.normalizedKey()
+        }
+
+        public func translation(for preference: LanguagePreference) -> String {
+            switch preference {
+            case .englishToSpanish:
+                return spanish
+            case .spanishToEnglish:
+                return english
+            }
         }
     }
 
-    private var entries: [Entry]
+    private struct RawDataset: Decodable {
+        struct Item: Decodable {
+            let className: String
+            let english: String
+            let spanish: String
+        }
+
+        let items: [Item]
+    }
+
+    private enum Constants {
+        static let resourceName = "vocab-es-en"
+        static let resourceExtension = "json"
+    }
+
+    private var entriesByClass: [String: Entry]
     private let logger: Logger
 
-    public init(entries: [Entry] = [], logger: Logger = .shared) {
-        self.entries = entries
+    public init(entries: [Entry]? = nil, bundle: Bundle? = nil, logger: Logger = .shared) {
         self.logger = logger
+        if let entries {
+            self.entriesByClass = Dictionary(uniqueKeysWithValues: entries.map { ($0.normalizedClassName, $0) })
+        } else {
+            let resourceBundle = bundle ?? .module
+            self.entriesByClass = VocabularyStore.loadEntries(from: resourceBundle, logger: logger)
+        }
     }
 
     public func add(_ entry: Entry) {
-        entries.append(entry)
-        Task { await logger.log("Stored vocabulary entry", level: .info, category: "VocabStore") }
+        entriesByClass[entry.normalizedClassName] = entry
+        Task { await logger.log("Stored vocabulary entry for \(entry.className)", level: .info, category: "VocabStore") }
     }
 
-    public func all() -> [Entry] {
-        entries
+    public func allEntries() -> [Entry] {
+        entriesByClass.values.sorted(by: { $0.className < $1.className })
+    }
+
+    public func entry(for className: String) -> Entry? {
+        entriesByClass[className.normalizedKey()]
+    }
+
+    public func translation(for className: String, preference: LanguagePreference) -> String? {
+        entry(for: className)?.translation(for: preference)
+    }
+
+    public func loadBundledEntries(from bundle: Bundle? = nil) {
+        let resourceBundle = bundle ?? .module
+        entriesByClass = VocabularyStore.loadEntries(from: resourceBundle, logger: logger)
+    }
+
+    private static func loadEntries(from bundle: Bundle, logger: Logger) -> [String: Entry] {
+        guard let url = bundle.url(forResource: Constants.resourceName, withExtension: Constants.resourceExtension) else {
+            Task { await logger.log("Failed to locate bundled vocabulary dataset", level: .error, category: "VocabStore") }
+            return [:]
+        }
+
+        do {
+            let data = try Data(contentsOf: url)
+            let rawDataset = try JSONDecoder().decode(RawDataset.self, from: data)
+            let entries = rawDataset.items.map { item in
+                Entry(className: item.className, english: item.english, spanish: item.spanish)
+            }
+
+            Task { await logger.log("Loaded \(entries.count) vocabulary entries", level: .info, category: "VocabStore") }
+
+            return Dictionary(uniqueKeysWithValues: entries.map { ($0.normalizedClassName, $0) })
+        } catch {
+            Task {
+                await logger.log(
+                    "Failed to decode vocabulary dataset: \(error.localizedDescription)",
+                    level: .error,
+                    category: "VocabStore"
+                )
+            }
+            return [:]
+        }
+    }
+}
+
+private extension String {
+    func normalizedKey() -> String {
+        trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }

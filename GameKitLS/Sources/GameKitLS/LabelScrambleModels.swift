@@ -95,124 +95,26 @@ public struct Round: Identifiable, Equatable, Sendable {
     }
 }
 
-public protocol LabelTranslating: Sendable {
-    func translation(for sourceLabel: String) -> String
-}
-
-public struct PlaceholderLabelTranslator: LabelTranslating {
-    private static let defaultDictionary: [String: String] = [
-        "person": "la persona",
-        "bicycle": "la bicicleta",
-        "car": "el coche",
-        "motorcycle": "la motocicleta",
-        "airplane": "el avión",
-        "bus": "el autobús",
-        "train": "el tren",
-        "truck": "el camión",
-        "boat": "el barco",
-        "traffic light": "el semáforo",
-        "fire hydrant": "la boca de incendio",
-        "stop sign": "la señal de stop",
-        "bench": "el banco",
-        "bird": "el pájaro",
-        "cat": "el gato",
-        "dog": "el perro",
-        "horse": "el caballo",
-        "sheep": "la oveja",
-        "cow": "la vaca",
-        "elephant": "el elefante",
-        "bear": "el oso",
-        "zebra": "la cebra",
-        "giraffe": "la jirafa",
-        "backpack": "la mochila",
-        "umbrella": "el paraguas",
-        "handbag": "el bolso",
-        "tie": "la corbata",
-        "suitcase": "la maleta",
-        "frisbee": "el frisbi",
-        "skis": "los esquís",
-        "snowboard": "la tabla de snowboard",
-        "sports ball": "la pelota",
-        "kite": "la cometa",
-        "baseball bat": "el bate de béisbol",
-        "baseball glove": "el guante de béisbol",
-        "skateboard": "la patineta",
-        "surfboard": "la tabla de surf",
-        "tennis racket": "la raqueta de tenis",
-        "bottle": "la botella",
-        "wine glass": "la copa",
-        "cup": "la taza",
-        "fork": "el tenedor",
-        "knife": "el cuchillo",
-        "spoon": "la cuchara",
-        "bowl": "el cuenco",
-        "banana": "el plátano",
-        "apple": "la manzana",
-        "sandwich": "el sándwich",
-        "orange": "la naranja",
-        "broccoli": "el brócoli",
-        "carrot": "la zanahoria",
-        "hot dog": "el perrito caliente",
-        "pizza": "la pizza",
-        "donut": "la rosquilla",
-        "cake": "el pastel",
-        "chair": "la silla",
-        "couch": "el sofá",
-        "potted plant": "la planta en maceta",
-        "bed": "la cama",
-        "dining table": "la mesa",
-        "toilet": "el inodoro",
-        "tv": "el televisor",
-        "laptop": "el portátil",
-        "mouse": "el ratón",
-        "remote": "el mando",
-        "keyboard": "el teclado",
-        "cell phone": "el móvil",
-        "microwave": "el microondas",
-        "oven": "el horno",
-        "toaster": "la tostadora",
-        "sink": "el fregadero",
-        "refrigerator": "el refrigerador",
-        "book": "el libro",
-        "clock": "el reloj",
-        "vase": "el jarrón",
-        "scissors": "las tijeras",
-        "teddy bear": "el osito",
-        "hair drier": "el secador",
-        "toothbrush": "el cepillo de dientes"
-    ]
-
-    public init() {}
-
-    public func translation(for sourceLabel: String) -> String {
-        let key = sourceLabel.lowercased()
-        if let translation = Self.defaultDictionary[key] {
-            return translation
-        }
-        return "el/la \(sourceLabel.lowercased())"
-    }
-}
-
 public struct RoundGenerator: Sendable {
     public let minimumObjectCount: Int
     public let maximumObjectCount: Int
 
-    private let translator: any LabelTranslating
+    private let labelProvider: any LabelProviding
     private let logger: Logger
 
     public init(
         minimumObjectCount: Int = 3,
         maximumObjectCount: Int = 6,
-        translator: any LabelTranslating = PlaceholderLabelTranslator(),
+        labelProvider: any LabelProviding = LabelEngine(),
         logger: Logger = .shared
     ) {
         self.minimumObjectCount = minimumObjectCount
         self.maximumObjectCount = max(minimumObjectCount, maximumObjectCount)
-        self.translator = translator
+        self.labelProvider = labelProvider
         self.logger = logger
     }
 
-    public func makeRound(from detections: [Detection]) -> Round? {
+    public func makeRound(from detections: [Detection], languagePreference: LanguagePreference) async -> Round? {
         let deduplicated = deduplicate(detections: detections)
         guard deduplicated.count >= minimumObjectCount else {
             Task { await logger.log("Insufficient detections for round", level: .debug, category: "GameKitLS.RoundGenerator") }
@@ -224,11 +126,22 @@ public struct RoundGenerator: Sendable {
         let cappedCount = min(maximumObjectCount, shuffled.count)
         let selected = Array(shuffled.prefix(cappedCount))
         let objects = selected.map(DetectedObject.init(from:))
-        let labels = objects.map { object in
-            Label(text: translator.translation(for: object.sourceLabel), sourceLabel: object.sourceLabel, objectID: object.id)
-        }
+        let labels = await labelProvider.makeLabels(for: objects, preference: languagePreference)
 
         Task { await logger.log("Generated round with \(objects.count) objects", level: .info, category: "GameKitLS.RoundGenerator") }
+        return Round(objects: objects, labels: labels)
+    }
+
+    public func makeFallbackRound(from detections: [Detection], languagePreference: LanguagePreference) async -> Round? {
+        let grouped = Dictionary(grouping: detections, by: { $0.label.lowercased() })
+        let unique = grouped.values.compactMap { $0.max(by: { $0.confidence < $1.confidence }) }
+        guard !unique.isEmpty else { return nil }
+
+        let capped = Array(unique.prefix(max(3, minimumObjectCount)))
+        let objects = capped.map(DetectedObject.init(from:))
+        let labels = await labelProvider.makeLabels(for: objects, preference: languagePreference)
+
+        Task { await logger.log("Generated fallback round", level: .info, category: "GameKitLS.RoundGenerator") }
         return Round(objects: objects, labels: labels)
     }
 
