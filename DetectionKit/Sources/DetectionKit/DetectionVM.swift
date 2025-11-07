@@ -1,5 +1,17 @@
 import Foundation
+#if canImport(CoreGraphics)
 import CoreGraphics
+#else
+public struct CGSize: Equatable, Sendable {
+    public var width: Double
+    public var height: Double
+
+    public init(width: Double, height: Double) {
+        self.width = width
+        self.height = height
+    }
+}
+#endif
 import Utilities
 
 #if canImport(Combine)
@@ -30,6 +42,7 @@ public final class DetectionVM: ObservableObject {
 
     private let logger: Logger
     private let processor: DetectionProcessor
+    private let errorStore: ErrorStore
     private var lastSubmissionDate: Date = .distantPast
     private var fpsWindowStart: Date?
     private var processedFrames = 0
@@ -38,14 +51,16 @@ public final class DetectionVM: ObservableObject {
 
     public init(
         service: any DetectionService,
-        throttleInterval: TimeInterval = 0.15,
+        throttleInterval: TimeInterval = 0.08,
         fpsWindow: TimeInterval = 1,
-        logger: Logger = .shared
+        logger: Logger = .shared,
+        errorStore: ErrorStore = .shared
     ) {
         self.throttleInterval = throttleInterval
         self.logger = logger
         self.processor = DetectionProcessor(service: service)
         self.fpsWindow = fpsWindow
+        self.errorStore = errorStore
     }
 
     public func setInputSize(_ size: CGSize) {
@@ -65,6 +80,7 @@ public final class DetectionVM: ObservableObject {
         lastSubmissionDate = now
         let logger = self.logger
         let processor = self.processor
+        let errorStore = self.errorStore
 
         Task(priority: .userInitiated) { [weak self] in
             guard let viewModel = self else { return }
@@ -85,13 +101,39 @@ public final class DetectionVM: ObservableObject {
                     viewModel.lastError = error
                 }
                 await logger.log(error.errorDescription, level: .error, category: "DetectionKit.DetectionVM")
+                await errorStore.add(
+                    LoggedError(
+                        message: error.errorDescription,
+                        metadata: [
+                            "requestID": request.id.uuidString,
+                            "category": "DetectionKit.DetectionVM"
+                        ]
+                    )
+                )
             } catch {
                 await MainActor.run {
                     viewModel.lastError = .unknown(error.localizedDescription)
                 }
                 await logger.log("Unexpected detection error: \(error.localizedDescription)", level: .error, category: "DetectionKit.DetectionVM")
+                await errorStore.add(
+                    LoggedError(
+                        message: error.localizedDescription,
+                        metadata: [
+                            "requestID": request.id.uuidString,
+                            "category": "DetectionKit.DetectionVM",
+                            "type": "unexpected"
+                        ]
+                    )
+                )
             }
         }
+    }
+
+    public func registerFatalError(_ message: String, metadata: [String: String] = [:]) {
+        lastError = .unknown(message)
+        let combined = metadata.merging(["category": "DetectionKit.Fatal"]) { current, _ in current }
+        Task { await logger.log(message, level: .error, category: "DetectionKit.Fatal") }
+        Task { await errorStore.add(LoggedError(message: message, metadata: combined)) }
     }
 
     private func registerFrame(timestamp: Date) {

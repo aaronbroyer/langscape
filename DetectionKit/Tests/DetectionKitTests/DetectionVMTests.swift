@@ -1,10 +1,12 @@
 import XCTest
 @testable import DetectionKit
+@testable import Utilities
 
 final class DetectionVMTests: XCTestCase {
     func testThrottleDropsRapidFrames() async throws {
         let service = MockDetectionService(result: [Detection(label: "object", confidence: 0.9, boundingBox: .init(origin: .init(x: 0, y: 0), size: .init(width: 1, height: 1)))])
-        let viewModel = await MainActor.run { DetectionVM(service: service, throttleInterval: 0.5, logger: .shared) }
+        let store = ErrorStore(capacity: 5)
+        let viewModel = await MainActor.run { DetectionVM(service: service, throttleInterval: 0.5, logger: .shared, errorStore: store) }
 
         let buffer = FakePixelBuffer()
         await MainActor.run {
@@ -20,7 +22,8 @@ final class DetectionVMTests: XCTestCase {
 
     func testErrorPropagationPublishesLastError() async throws {
         let service = MockDetectionService(result: [], error: .inferenceFailed("forced"))
-        let viewModel = await MainActor.run { DetectionVM(service: service, logger: .shared) }
+        let store = ErrorStore(capacity: 5)
+        let viewModel = await MainActor.run { DetectionVM(service: service, logger: .shared, errorStore: store) }
 
         await MainActor.run {
             viewModel.enqueue(DetectionRequest(timestamp: Date(), pixelBuffer: FakePixelBuffer()))
@@ -30,6 +33,21 @@ final class DetectionVMTests: XCTestCase {
 
         let lastError = await MainActor.run { viewModel.lastError }
         XCTAssertEqual(lastError, .inferenceFailed("forced"))
+    }
+
+    func testDetectionErrorsArePersisted() async throws {
+        let service = MockDetectionService(result: [], error: .modelNotFound)
+        let store = ErrorStore(capacity: 5)
+        let viewModel = await MainActor.run { DetectionVM(service: service, logger: .shared, errorStore: store) }
+
+        await MainActor.run {
+            viewModel.enqueue(DetectionRequest(timestamp: Date(), pixelBuffer: FakePixelBuffer()))
+        }
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        let errors = await store.allErrors()
+        XCTAssertEqual(errors.first?.message, DetectionError.modelNotFound.errorDescription)
     }
 }
 
