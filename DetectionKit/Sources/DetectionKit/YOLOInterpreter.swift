@@ -118,6 +118,9 @@ public actor YOLOInterpreter: DetectionService {
             if let url = Bundle.module.url(forResource: name, withExtension: "mlmodelc") {
                 return url
             }
+            if let pkg = Bundle.module.url(forResource: name, withExtension: "mlpackage") {
+                return pkg
+            }
             // If a raw .mlmodel is included, compile it on device.
             if let raw = Bundle.module.url(forResource: name, withExtension: "mlmodel") {
                 do {
