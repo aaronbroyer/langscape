@@ -2,6 +2,9 @@
 import SwiftUI
 import AVFoundation
 import DetectionKit
+import GameKitLS
+import UIComponents
+import DesignSystem
 import Utilities
 #if canImport(UIKit)
 import UIKit
@@ -9,7 +12,12 @@ import UIKit
 
 struct CameraPreviewView: View {
     @ObservedObject var viewModel: DetectionVM
+    @ObservedObject var gameViewModel: LabelScrambleVM
     @StateObject private var controller = CameraSessionController()
+
+    @State private var showCompletionFlash = false
+    @State private var homeCardPressed = false
+    @State private var startPulse = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -17,32 +25,17 @@ struct CameraPreviewView: View {
                 CameraPreviewLayer(session: controller.session)
                     .ignoresSafeArea()
 
-                detectionOverlay(in: proxy.size)
+                overlays(in: proxy.size)
 
-                #if DEBUG
-                if ProcessInfo.processInfo.environment["SHOW_HUD"] == "1" {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("FPS: \(viewModel.fps, specifier: "%.1f")")
-                            .font(.headline)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
-                            .foregroundStyle(Color.white)
-
-                        if let error = viewModel.lastError {
-                            Text(error.errorDescription)
-                                .font(.footnote)
-                                .padding(8)
-                                .background(.red.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
-                                .foregroundStyle(Color.white)
-                        }
-
-                        Spacer()
-                    }
-                    .padding()
+                if showCompletionFlash {
+                    Color.white
+                        .ignoresSafeArea()
+                        .transition(.opacity)
                 }
-                #endif
+
+                debugHUD
             }
+            .coordinateSpace(name: "experience")
             .background(Color.black)
             .task {
                 await controller.setViewModel(viewModel)
@@ -51,34 +44,276 @@ struct CameraPreviewView: View {
             .onDisappear {
                 controller.stopSession()
             }
+            .onChange(of: viewModel.detections) { newDetections in
+                gameViewModel.ingestDetections(newDetections)
+            }
+            .onChange(of: gameViewModel.phase, perform: handlePhaseChange)
         }
     }
 
     @ViewBuilder
-    private func detectionOverlay(in size: CGSize) -> some View {
+    private func overlays(in size: CGSize) -> some View {
         ZStack {
-            ForEach(viewModel.detections) { detection in
-                let rect = rect(for: detection, in: size)
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color.green, lineWidth: 2)
+            switch gameViewModel.phase {
+            case .home:
+                homeOverlay
+            case .scanning:
+                detectionOverlay(for: viewModel.detections, in: size)
+                scanningIndicator
+            case .ready:
+                detectionOverlay(for: viewModel.detections, in: size)
+                startButton
+            case .playing:
+                roundOverlay(in: size, interactive: true)
+            case .paused:
+                roundOverlay(in: size, interactive: false)
+            case .completed:
+                EmptyView()
+            }
+
+            if gameViewModel.phase == .paused {
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+
+                PauseOverlay(resumeAction: gameViewModel.resume, exitAction: exitToHome)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+    }
+
+    private var homeOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.25)
+                .ignoresSafeArea()
+
+            VStack(spacing: Spacing.large.cgFloat) {
+                Spacer()
+
+                Text("Langscape")
+                    .font(Typography.title.font)
+                    .foregroundStyle(ColorPalette.primary.swiftUIColor)
+                    .shadow(color: Color.black.opacity(0.3), radius: 12, x: 0, y: 6)
+
+                VStack(spacing: Spacing.medium.cgFloat) {
+                    Button(action: beginScanning) {
+                        TranslucentPanel(cornerRadius: 24) {
+                            HStack(spacing: Spacing.medium.cgFloat) {
+                                Image(systemName: "character.book.closed")
+                                    .font(.system(size: 28, weight: .bold))
+                                    .foregroundStyle(ColorPalette.accent.swiftUIColor)
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Label Scramble")
+                                        .font(Typography.body.font.weight(.semibold))
+                                        .foregroundStyle(ColorPalette.primary.swiftUIColor)
+
+                                    Text("Match words to what you see")
+                                        .font(Typography.caption.font)
+                                        .foregroundStyle(ColorPalette.primary.swiftUIColor.opacity(0.7))
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(ColorPalette.primary.swiftUIColor.opacity(0.6))
+                            }
+                            .padding(.vertical, Spacing.medium.cgFloat)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .scaleEffect(homeCardPressed ? 0.96 : 1)
+                    .animation(.spring(response: 0.45, dampingFraction: 0.72), value: homeCardPressed)
+
+                    TranslucentPanel(cornerRadius: 24) {
+                        HStack {
+                            Text("More activities coming soon")
+                                .font(Typography.body.font)
+                                .foregroundStyle(ColorPalette.primary.swiftUIColor.opacity(0.4))
+                            Spacer()
+                        }
+                        .padding(.vertical, Spacing.medium.cgFloat)
+                    }
+                    .opacity(0.4)
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, Spacing.large.cgFloat)
+            .padding(.bottom, Spacing.xLarge.cgFloat * 2)
+        }
+    }
+
+    private var scanningIndicator: some View {
+        VStack {
+            Spacer()
+
+            TranslucentPanel(cornerRadius: 20) {
+                HStack(spacing: Spacing.small.cgFloat) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                    Text("Locking onto objects…")
+                        .font(Typography.body.font)
+                        .foregroundStyle(ColorPalette.primary.swiftUIColor)
+                }
+                .padding(.vertical, Spacing.small.cgFloat)
+            }
+            .padding(.bottom, Spacing.xLarge.cgFloat * 1.2)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var startButton: some View {
+        VStack {
+            Spacer()
+
+            Button(action: startRound) {
+                ZStack {
+                    Circle()
+                        .fill(ColorPalette.accent.swiftUIColor)
+                        .frame(width: 120, height: 120)
+                        .shadow(color: ColorPalette.accent.swiftUIColor.opacity(0.45), radius: 22, x: 0, y: 10)
+
+                    Text("Start")
+                        .font(Typography.body.font.weight(.bold))
+                        .foregroundStyle(Color.white)
+                }
+            }
+            .buttonStyle(.plain)
+            .scaleEffect(startPulse ? 1.08 : 1)
+            .padding(.bottom, Spacing.xLarge.cgFloat * 1.6)
+        }
+        .onAppear { startPulseAnimation() }
+        .onDisappear { startPulse = false }
+    }
+
+    @ViewBuilder
+    private func roundOverlay(in size: CGSize, interactive: Bool) -> some View {
+        if let round = gameViewModel.round {
+            RoundPlayLayer(
+                round: round,
+                placedLabels: gameViewModel.placedLabels,
+                lastIncorrectLabelID: gameViewModel.lastIncorrectLabelID,
+                interactive: interactive,
+                frameProvider: { frame(for: $0, in: size) },
+                attemptMatch: { labelID, objectID in
+                    gameViewModel.attemptMatch(labelID: labelID, on: objectID)
+                },
+                onPause: gameViewModel.pause
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var debugHUD: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["SHOW_HUD"] == "1" {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("FPS: \(viewModel.fps, specifier: "%.1f")")
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                    .foregroundStyle(Color.white)
+
+                if let error = viewModel.lastError {
+                    Text(error.errorDescription)
+                        .font(.system(size: 12, weight: .regular))
+                        .padding(8)
+                        .background(Color.red.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(Color.white)
+                }
+
+                Spacer()
+            }
+            .padding()
+        }
+        #endif
+    }
+
+    private func exitToHome() {
+        showCompletionFlash = false
+        gameViewModel.exitToHome()
+    }
+
+    private func handlePhaseChange(_ phase: LabelScrambleVM.Phase) {
+        switch phase {
+        case .completed:
+            showCompletionFlash = true
+            Task { [gameViewModel] in
+                try? await Task.sleep(nanoseconds: 280_000_000)
+                await MainActor.run {
+                    showCompletionFlash = false
+                    gameViewModel.acknowledgeCompletion()
+                }
+            }
+        case .ready:
+            startPulseAnimation()
+        default:
+            if startPulse {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    startPulse = false
+                }
+            }
+        }
+    }
+
+    private func startPulseAnimation() {
+        guard !startPulse else { return }
+        withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
+            startPulse = true
+        }
+    }
+
+    private func startRound() {
+        guard gameViewModel.phase == .ready else { return }
+        gameViewModel.startRound()
+    }
+
+    private func beginScanning() {
+        guard gameViewModel.phase == .home else { return }
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.72)) {
+            homeCardPressed = true
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: 160_000_000)
+            await MainActor.run {
+                homeCardPressed = false
+            }
+        }
+        gameViewModel.beginScanning()
+    }
+
+    private func detectionOverlay(for detections: [Detection], in size: CGSize) -> some View {
+        ZStack {
+            ForEach(detections) { detection in
+                let rect = frame(for: detection, in: size)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(ColorPalette.accent.swiftUIColor.opacity(0.9), lineWidth: 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.black.opacity(0.18))
+                    )
                     .frame(width: rect.width, height: rect.height)
                     .overlay(alignment: .topLeading) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(detection.label)
-                                .font(.caption)
-                                .bold()
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(detection.label.capitalized)
+                                .font(Typography.caption.font.weight(.semibold))
+                                .foregroundStyle(Color.white)
+
                             Text("\(Int(detection.confidence * 100))%")
-                                .font(.caption2)
+                                .font(Typography.caption.font)
+                                .foregroundStyle(Color.white.opacity(0.75))
                         }
-                        .padding(6)
-                        .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 4))
-                        .foregroundStyle(Color.white)
-                        .offset(x: 4, y: 4)
+                        .padding(Spacing.xSmall.cgFloat)
+                        .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .offset(x: 6, y: 6)
                     }
                     .position(x: rect.midX, y: rect.midY)
             }
         }
         .frame(width: size.width, height: size.height)
+        .allowsHitTesting(false)
     }
 }
 
@@ -211,6 +446,145 @@ extension CameraSessionController: AVCaptureVideoDataOutputSampleBufferDelegate 
     }
 }
 
+private struct RoundPlayLayer: View {
+    let round: Round
+    let placedLabels: Set<Label.ID>
+    let lastIncorrectLabelID: Label.ID?
+    let interactive: Bool
+    let frameProvider: (DetectedObject) -> CGRect
+    let attemptMatch: (Label.ID, DetectedObject.ID) -> LabelScrambleVM.MatchResult
+    let onPause: () -> Void
+
+    private var columns: [GridItem] {
+        [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    }
+
+    private var frames: [DetectedObject.ID: CGRect] {
+        Dictionary(uniqueKeysWithValues: round.objects.map { ($0.id, frameProvider($0)) })
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            ForEach(round.objects) { object in
+                if let frame = frames[object.id] {
+                    ObjectTargetOverlay(
+                        frame: frame,
+                        state: isSatisfied(objectID: object.id) ? .satisfied : .pending
+                    )
+                    .allowsHitTesting(false)
+                }
+            }
+
+            VStack {
+                Spacer()
+
+                TranslucentPanel(cornerRadius: 28) {
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(round.labels) { label in
+                            let state = tokenState(for: label)
+                            DraggableToken(
+                                label: label,
+                                state: state,
+                                interactive: interactive,
+                                dropHandler: { point in
+                                    guard let destinationID = destination(for: point) else { return .ignored }
+                                    return attemptMatch(label.id, destinationID)
+                                }
+                            )
+                        }
+                    }
+                    .padding(.top, Spacing.small.cgFloat)
+                    .padding(.bottom, Spacing.small.cgFloat)
+                }
+                .padding(.horizontal, Spacing.large.cgFloat)
+                .padding(.bottom, Spacing.xLarge.cgFloat)
+            }
+
+            if interactive {
+                Button(action: onPause) {
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(ColorPalette.primary.swiftUIColor)
+                        .padding(Spacing.small.cgFloat)
+                        .background(Color.white.opacity(0.8), in: Circle())
+                        .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 6)
+                }
+                .padding(.top, 50)
+                .padding(.trailing, Spacing.large.cgFloat)
+            }
+        }
+    }
+
+    private func isSatisfied(objectID: DetectedObject.ID) -> Bool {
+        round.labels.contains { $0.objectID == objectID && placedLabels.contains($0.id) }
+    }
+
+    private func tokenState(for label: Label) -> LabelToken.VisualState {
+        if placedLabels.contains(label.id) { return .placed }
+        if lastIncorrectLabelID == label.id { return .incorrect }
+        return .idle
+    }
+
+    private func destination(for point: CGPoint) -> DetectedObject.ID? {
+        frames.first { expand(frame: $0.value).contains(point) }?.key
+    }
+
+    private func expand(frame: CGRect) -> CGRect {
+        let inset = max(24, min(frame.width, frame.height) * 0.2)
+        return frame.insetBy(dx: -inset, dy: -inset)
+    }
+}
+
+private struct DraggableToken: View {
+    let label: Label
+    let state: LabelToken.VisualState
+    let interactive: Bool
+    let dropHandler: (CGPoint) -> LabelScrambleVM.MatchResult
+
+    @State private var dragOffset: CGSize = .zero
+    @State private var isDragging = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            let frame = proxy.frame(in: .named("experience"))
+            LabelToken(text: label.text, state: state)
+                .opacity(state == .placed ? 0 : 1)
+                .scaleEffect(isDragging ? 1.05 : 1)
+                .offset(dragOffset)
+                .animation(.spring(response: 0.3, dampingFraction: 0.78), value: dragOffset)
+                .animation(.spring(response: 0.3, dampingFraction: 0.78), value: state)
+                .allowsHitTesting(interactive && state != .placed)
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            guard interactive, state != .placed else { return }
+                            dragOffset = value.translation
+                            isDragging = true
+                        }
+                        .onEnded { value in
+                            guard interactive, state != .placed else { return }
+                            let dropPoint = CGPoint(
+                                x: frame.midX + value.translation.width,
+                                y: frame.midY + value.translation.height
+                            )
+                            _ = dropHandler(dropPoint)
+                            withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) {
+                                dragOffset = .zero
+                                isDragging = false
+                            }
+                        }
+                )
+                .onChange(of: state) { newState in
+                    if newState == .placed {
+                        dragOffset = .zero
+                        isDragging = false
+                    }
+                }
+        }
+        .frame(height: 56)
+    }
+}
+
 private extension NormalizedRect {
     func rect(in size: CGSize) -> CGRect {
         let width = CGFloat(self.size.width) * size.width
@@ -222,7 +596,15 @@ private extension NormalizedRect {
 }
 
 private extension CameraPreviewView {
-    func rect(for detection: Detection, in viewSize: CGSize) -> CGRect {
+    func frame(for detection: Detection, in viewSize: CGSize) -> CGRect {
+        frame(for: detection.boundingBox, in: viewSize)
+    }
+
+    func frame(for object: DetectedObject, in viewSize: CGSize) -> CGRect {
+        frame(for: object.boundingBox, in: viewSize)
+    }
+
+    func frame(for normalizedRect: NormalizedRect, in viewSize: CGSize) -> CGRect {
         if let imgSize = viewModel.inputImageSize, imgSize.width > 0, imgSize.height > 0 {
             let sw = viewSize.width
             let sh = viewSize.height
@@ -233,14 +615,13 @@ private extension CameraPreviewView {
             let dh = ih * scale
             let offsetX = (sw - dw) / 2
             let offsetY = (sh - dh) / 2
-            let bb = detection.boundingBox
-            let x = offsetX + CGFloat(bb.origin.x) * dw
-            let y = offsetY + CGFloat(bb.origin.y) * dh
-            let w = CGFloat(bb.size.width) * dw
-            let h = CGFloat(bb.size.height) * dh
+            let x = offsetX + CGFloat(normalizedRect.origin.x) * dw
+            let y = offsetY + CGFloat(normalizedRect.origin.y) * dh
+            let w = CGFloat(normalizedRect.size.width) * dw
+            let h = CGFloat(normalizedRect.size.height) * dh
             return CGRect(x: x, y: y, width: w, height: h)
         }
-        return detection.boundingBox.rect(in: viewSize)
+        return normalizedRect.rect(in: viewSize)
     }
 }
 #endif
