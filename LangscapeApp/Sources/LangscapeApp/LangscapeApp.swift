@@ -2,11 +2,13 @@
 import SwiftUI
 import DetectionKit
 import GameKitLS
+import Utilities
 
 @main
 struct LangscapeAppMain: App {
     @StateObject private var detectionViewModel: DetectionVM
     @StateObject private var labelScrambleViewModel: LabelScrambleVM
+    @StateObject private var appSettings: AppSettings
 
     init() {
         let detectionVM = DetectionVM(service: YOLOInterpreter())
@@ -14,11 +16,68 @@ struct LangscapeAppMain: App {
 
         let scrambleVM = LabelScrambleVM()
         _labelScrambleViewModel = StateObject(wrappedValue: scrambleVM)
+
+        _appSettings = StateObject(wrappedValue: AppSettings.shared)
     }
 
     var body: some Scene {
         WindowGroup {
-            CameraPreviewView(viewModel: detectionViewModel, gameViewModel: labelScrambleViewModel)
+            AppFlowView(
+                detectionViewModel: detectionViewModel,
+                gameViewModel: labelScrambleViewModel
+            )
+            .environmentObject(appSettings)
+        }
+    }
+}
+
+private struct AppFlowView: View {
+    enum Route: Hashable {
+        case experience
+    }
+
+    @EnvironmentObject private var settings: AppSettings
+    @ObservedObject var detectionViewModel: DetectionVM
+    @ObservedObject var gameViewModel: LabelScrambleVM
+
+    @State private var path: [Route] = []
+    @StateObject private var onboardingViewModel = OnboardingViewModel()
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            OnboardingFlowView(viewModel: onboardingViewModel) {
+                transitionToExperience()
+            }
+            .navigationBarBackButtonHidden(true)
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .experience:
+                    CameraPreviewView(
+                        viewModel: detectionViewModel,
+                        gameViewModel: gameViewModel
+                    )
+                    .navigationBarBackButtonHidden(true)
+                    .toolbar(.hidden, for: .navigationBar)
+                }
+            }
+        }
+        .onAppear(perform: configureInitialRoute)
+        .onChange(of: settings.hasCompletedOnboarding) { completed in
+            if completed {
+                transitionToExperience()
+            }
+        }
+    }
+
+    private func configureInitialRoute() {
+        if settings.hasCompletedOnboarding {
+            transitionToExperience()
+        }
+    }
+
+    private func transitionToExperience() {
+        if path != [.experience] {
+            path = [.experience]
         }
     }
 }

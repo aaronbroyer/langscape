@@ -85,64 +85,54 @@ struct CameraPreviewView: View {
 
     private var homeOverlay: some View {
         ZStack {
-            Color.black.opacity(0.25)
+            Rectangle()
+                .fill(.ultraThinMaterial)
                 .ignoresSafeArea()
+                .overlay(Color.black.opacity(0.25).ignoresSafeArea())
 
             VStack(spacing: Spacing.large.cgFloat) {
-                Spacer()
-
                 Text("Langscape")
-                    .font(Typography.title.font)
+                    .font(Typography.title.font.weight(.bold))
                     .foregroundStyle(ColorPalette.primary.swiftUIColor)
-                    .shadow(color: Color.black.opacity(0.3), radius: 12, x: 0, y: 6)
+                    .shadow(color: Color.black.opacity(0.35), radius: 14, x: 0, y: 8)
+                    .padding(.top, Spacing.xLarge.cgFloat * 1.4)
+
+                Spacer()
 
                 VStack(spacing: Spacing.medium.cgFloat) {
                     Button(action: beginScanning) {
-                        TranslucentPanel(cornerRadius: 24) {
-                            HStack(spacing: Spacing.medium.cgFloat) {
-                                Image(systemName: "character.book.closed")
-                                    .font(.system(size: 28, weight: .bold))
-                                    .foregroundStyle(ColorPalette.accent.swiftUIColor)
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Label Scramble")
-                                        .font(Typography.body.font.weight(.semibold))
-                                        .foregroundStyle(ColorPalette.primary.swiftUIColor)
-
-                                    Text("Match words to what you see")
-                                        .font(Typography.caption.font)
-                                        .foregroundStyle(ColorPalette.primary.swiftUIColor.opacity(0.7))
-                                }
-
-                                Spacer()
-
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(ColorPalette.primary.swiftUIColor.opacity(0.6))
-                            }
-                            .padding(.vertical, Spacing.medium.cgFloat)
-                        }
+                        HomeActivityCard(
+                            iconName: "character.book.closed",
+                            title: "Label Scramble",
+                            subtitle: "Match words to what you see"
+                        )
                     }
                     .buttonStyle(.plain)
                     .scaleEffect(homeCardPressed ? 0.96 : 1)
                     .animation(.spring(response: 0.45, dampingFraction: 0.72), value: homeCardPressed)
 
-                    TranslucentPanel(cornerRadius: 24) {
-                        HStack {
-                            Text("More activities coming soon")
-                                .font(Typography.body.font)
-                                .foregroundStyle(ColorPalette.primary.swiftUIColor.opacity(0.4))
-                            Spacer()
-                        }
-                        .padding(.vertical, Spacing.medium.cgFloat)
-                    }
-                    .opacity(0.4)
+                    HomeActivityCard(
+                        iconName: "sparkles",
+                        title: "More activities",
+                        subtitle: "Coming soon",
+                        enabled: false
+                    )
                 }
+                .padding(Spacing.large.cgFloat)
+                .background(
+                    RoundedRectangle(cornerRadius: 36, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 36, style: .continuous)
+                                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                        )
+                )
+                .shadow(color: Color.black.opacity(0.22), radius: 18, x: 0, y: 12)
+                .padding(.horizontal, Spacing.large.cgFloat)
 
                 Spacer()
             }
-            .padding(.horizontal, Spacing.large.cgFloat)
-            .padding(.bottom, Spacing.xLarge.cgFloat * 2)
+            .padding(.bottom, Spacing.xLarge.cgFloat * 2.2)
         }
     }
 
@@ -593,6 +583,51 @@ private struct DraggableToken: View {
                 }
         }
         .frame(height: 56)
+    }
+}
+
+private struct HomeActivityCard: View {
+    let iconName: String
+    let title: String
+    let subtitle: String
+    var enabled: Bool = true
+
+    var body: some View {
+        HStack(spacing: Spacing.medium.cgFloat) {
+            Image(systemName: iconName)
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(ColorPalette.accent.swiftUIColor.opacity(enabled ? 1 : 0.4))
+
+            VStack(alignment: .leading, spacing: Spacing.xSmall.cgFloat) {
+                Text(title)
+                    .font(Typography.body.font.weight(.semibold))
+                    .foregroundStyle(ColorPalette.primary.swiftUIColor)
+
+                Text(subtitle)
+                    .font(Typography.caption.font)
+                    .foregroundStyle(ColorPalette.primary.swiftUIColor.opacity(0.7))
+            }
+
+            Spacer()
+
+            if enabled {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(ColorPalette.primary.swiftUIColor.opacity(0.6))
+            }
+        }
+        .padding(.vertical, Spacing.medium.cgFloat)
+        .padding(.horizontal, Spacing.medium.cgFloat)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(ColorPalette.surface.swiftUIColor.opacity(enabled ? 0.35 : 0.18))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
+        )
+        .opacity(enabled ? 1 : 0.55)
     }
 }
 
