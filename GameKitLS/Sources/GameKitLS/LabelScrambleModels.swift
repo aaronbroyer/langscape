@@ -95,7 +95,12 @@ public struct Round: Identifiable, Equatable, Sendable {
     }
 }
 
-public struct RoundGenerator: Sendable {
+public protocol RoundGenerating: Sendable {
+    func makeRound(from detections: [Detection], languagePreference: LanguagePreference) async -> Round?
+    func makeFallbackRound(from detections: [Detection], languagePreference: LanguagePreference) async -> Round?
+}
+
+public struct RoundGenerator: RoundGenerating {
     public let minimumObjectCount: Int
     public let maximumObjectCount: Int
 
