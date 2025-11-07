@@ -3,6 +3,7 @@ import SwiftUI
 import AVFoundation
 import DetectionKit
 import GameKitLS
+import GameKitLS
 import UIComponents
 import DesignSystem
 import Utilities
@@ -448,11 +449,11 @@ extension CameraSessionController: AVCaptureVideoDataOutputSampleBufferDelegate 
 
 private struct RoundPlayLayer: View {
     let round: Round
-    let placedLabels: Set<Label.ID>
-    let lastIncorrectLabelID: Label.ID?
+    let placedLabels: Set<GameKitLS.Label.ID>
+    let lastIncorrectLabelID: GameKitLS.Label.ID?
     let interactive: Bool
     let frameProvider: (DetectedObject) -> CGRect
-    let attemptMatch: (Label.ID, DetectedObject.ID) -> LabelScrambleVM.MatchResult
+    let attemptMatch: (GameKitLS.Label.ID, DetectedObject.ID) -> LabelScrambleVM.MatchResult
     let onPause: () -> Void
 
     private var columns: [GridItem] {
@@ -519,7 +520,7 @@ private struct RoundPlayLayer: View {
         round.labels.contains { $0.objectID == objectID && placedLabels.contains($0.id) }
     }
 
-    private func tokenState(for label: Label) -> LabelToken.VisualState {
+    private func tokenState(for label: GameKitLS.Label) -> LabelToken.VisualState {
         if placedLabels.contains(label.id) { return .placed }
         if lastIncorrectLabelID == label.id { return .incorrect }
         return .idle
@@ -536,7 +537,7 @@ private struct RoundPlayLayer: View {
 }
 
 private struct DraggableToken: View {
-    let label: Label
+    let label: GameKitLS.Label
     let state: LabelToken.VisualState
     let interactive: Bool
     let dropHandler: (CGPoint) -> LabelScrambleVM.MatchResult
