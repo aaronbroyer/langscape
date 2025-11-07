@@ -7,3 +7,7 @@ build/
 .swiftpm/
 .build/
 xcuserdata/
+
+.venv*
+
+yolov8n.pt
