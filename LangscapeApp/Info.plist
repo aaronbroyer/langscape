@@ -20,9 +20,9 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>UILaunchScreen</key>
-	<dict/>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera is used for live detection and language activities.</string>
+	<key>UILaunchScreen</key>
+	<dict/>
 </dict>
 </plist>
