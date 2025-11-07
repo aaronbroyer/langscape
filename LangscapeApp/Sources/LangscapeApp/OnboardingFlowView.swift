@@ -13,15 +13,15 @@ struct OnboardingFlowView: View {
             switch viewModel.step {
             case .splash:
                 VStack(spacing: 28) {
-                    LangscapeLogo(style: .full, glyphSize: 68)
-                    CTAButton("Get Started", systemImage: "viewfinder") {
+                    LangscapeLogo(style: .full, glyphSize: 68, brand: .context)
+                    CTAButton("Get Started") {
                         viewModel.advanceFromSplash()
                     }
                 }
                 .padding()
             case .slides:
                 VStack(spacing: 22) {
-                    LangscapeLogo(style: .mark, glyphSize: 56)
+                    LangscapeLogo(style: .mark, glyphSize: 56, brand: .context)
                     Text("Learn by labeling what you see.")
                         .font(.title2)
                         .multilineTextAlignment(.center)
@@ -40,7 +40,7 @@ struct OnboardingFlowView: View {
                 .padding()
             case .cameraPermission:
                 VStack(spacing: 22) {
-                    LangscapeLogo(style: .mark, glyphSize: 56)
+                    LangscapeLogo(style: .mark, glyphSize: 56, brand: .context)
                     Text("Camera Access")
                         .font(.title2)
                     Text("We use the camera to detect objects for activities.")
