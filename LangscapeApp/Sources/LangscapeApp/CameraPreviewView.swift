@@ -197,6 +197,7 @@ struct CameraPreviewView: View {
                 placedLabels: gameViewModel.placedLabels,
                 lastIncorrectLabelID: gameViewModel.lastIncorrectLabelID,
                 interactive: interactive,
+                showTargets: !interactive,
                 frameProvider: { frame(for: $0, in: size) },
                 attemptMatch: { labelID, objectID in
                     gameViewModel.attemptMatch(labelID: labelID, on: objectID)
@@ -458,6 +459,7 @@ private struct RoundPlayLayer: View {
     let placedLabels: Set<GameKitLS.Label.ID>
     let lastIncorrectLabelID: GameKitLS.Label.ID?
     let interactive: Bool
+    let showTargets: Bool
     let frameProvider: (DetectedObject) -> CGRect
     let attemptMatch: (GameKitLS.Label.ID, DetectedObject.ID) -> LabelScrambleVM.MatchResult
     let onPause: () -> Void
@@ -472,13 +474,15 @@ private struct RoundPlayLayer: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            ForEach(round.objects) { object in
-                if let frame = frames[object.id] {
-                    ObjectTargetOverlay(
-                        frame: frame,
-                        state: isSatisfied(objectID: object.id) ? .satisfied : .pending
-                    )
-                    .allowsHitTesting(false)
+            if showTargets {
+                ForEach(round.objects) { object in
+                    if let frame = frames[object.id] {
+                        ObjectTargetOverlay(
+                            frame: frame,
+                            state: isSatisfied(objectID: object.id) ? .satisfied : .pending
+                        )
+                        .allowsHitTesting(false)
+                    }
                 }
             }
 
