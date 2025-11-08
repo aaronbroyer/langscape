@@ -30,59 +30,73 @@ public struct VLMReferee: @unchecked Sendable {
     private let clipTokenizer: CLIPTokenizer?
     private let isMobileCLIP: Bool
     private let ciContext = CIContext()
-    private let logger: Logger
+    private let logger: Utilities.Logger
     private let cropSize: Int
     private let acceptGate: Double
 
-    public init(bundle: Bundle? = nil, logger: Logger = .shared, cropSize: Int = 224, acceptGate: Double = 0.7) throws {
+    public init(bundle: Bundle? = nil, logger: Utilities.Logger = .shared, cropSize: Int = 224, acceptGate: Double = 0.7) throws {
         let resourceBundle = bundle ?? Bundle.module
         self.logger = logger
         self.cropSize = cropSize
         self.acceptGate = acceptGate
 
+        // Prepare locals for one-time assignment to lets
+        var localModel: MLModel? = nil
+        var localImageFeature: String? = nil
+        var localTextFeature: String? = nil
+        var localOutputFeature: String? = nil
+        var localYesKey: String? = nil
+
+        var localClipText: MLModel? = nil
+        var localClipImage: MLModel? = nil
+        var localClipTokenizer: CLIPTokenizer? = nil
+        var localIsMobileCLIP = false
+
         // Try MobileCLIP (preferred if present)
         if let (txtURL, imgURL) = VLMReferee.locateMobileCLIP(in: resourceBundle) {
-            self.clipTextModel = try? MLModel(contentsOf: txtURL)
-            self.clipImageModel = try? MLModel(contentsOf: imgURL)
-            self.clipTokenizer = CLIPTokenizer(bundle: resourceBundle)
-            self.isMobileCLIP = (clipTextModel != nil && clipImageModel != nil && clipTokenizer != nil)
-            self.model = nil
-            self.imageFeature = nil
-            self.textFeature = nil
-            self.outputFeature = nil
-            self.yesKey = nil
-            if isMobileCLIP {
+            localClipText = try? MLModel(contentsOf: txtURL)
+            localClipImage = try? MLModel(contentsOf: imgURL)
+            localClipTokenizer = CLIPTokenizer(bundle: resourceBundle)
+            localIsMobileCLIP = (localClipText != nil && localClipImage != nil && localClipTokenizer != nil)
+            if localIsMobileCLIP {
                 Task { await logger.log("Loaded MobileCLIP referee: \(imgURL.deletingPathExtension().lastPathComponent)", level: .info, category: "DetectionKit.VLMReferee") }
-                return
             }
-        } else {
-            self.clipTextModel = nil
-            self.clipImageModel = nil
-            self.clipTokenizer = nil
-            self.isMobileCLIP = false
         }
 
         // Fallback to single‑model VLM packaged as one CoreML bundle
-        guard let url = VLMReferee.locateSingleModel(in: resourceBundle) else {
-            throw Error.modelNotFound
+        if !localIsMobileCLIP {
+            guard let url = VLMReferee.locateSingleModel(in: resourceBundle) else {
+                throw Error.modelNotFound
+            }
+            let mdl = try MLModel(contentsOf: url)
+            localModel = mdl
+            let inputs = mdl.modelDescription.inputDescriptionsByName
+            let outputs = mdl.modelDescription.outputDescriptionsByName
+            if let (k, _) = inputs.first(where: { $0.value.type == MLFeatureType.image }) { localImageFeature = k } else { throw Error.modelNotFound }
+            if let (k, _) = inputs.first(where: { $0.value.type == MLFeatureType.string }) { localTextFeature = k } else { throw Error.modelNotFound }
+            if let (k, _) = outputs.first(where: { $0.value.type == MLFeatureType.double }) {
+                localOutputFeature = k
+                localYesKey = nil
+            } else if let (k, _) = outputs.first(where: { $0.value.type == MLFeatureType.dictionary }) {
+                localOutputFeature = k
+                localYesKey = "yes"
+            } else {
+                localOutputFeature = nil
+                localYesKey = nil
+            }
+            Task { await logger.log("Loaded VLM referee: \(url.lastPathComponent)", level: .info, category: "DetectionKit.VLMReferee") }
         }
-        let mdl = try MLModel(contentsOf: url)
-        self.model = mdl
-        let inputs = mdl.modelDescription.inputDescriptionsByName
-        let outputs = mdl.modelDescription.outputDescriptionsByName
-        if let (k, _) = inputs.first(where: { $0.value.type == .image }) { self.imageFeature = k } else { throw Error.modelNotFound }
-        if let (k, _) = inputs.first(where: { $0.value.type == .string }) { self.textFeature = k } else { throw Error.modelNotFound }
-        if let (k, _) = outputs.first(where: { $0.value.type == .double }) {
-            self.outputFeature = k
-            self.yesKey = nil
-        } else if let (k, _) = outputs.first(where: { $0.value.type == .dictionary(keyType: .string, valueType: .double) }) {
-            self.outputFeature = k
-            self.yesKey = "yes"
-        } else {
-            self.outputFeature = nil
-            self.yesKey = nil
-        }
-        Task { await logger.log("Loaded VLM referee: \(url.lastPathComponent)", level: .info, category: "DetectionKit.VLMReferee") }
+
+        // One-time assignment to immutable properties
+        self.model = localModel
+        self.imageFeature = localImageFeature
+        self.textFeature = localTextFeature
+        self.outputFeature = localOutputFeature
+        self.yesKey = localYesKey
+        self.clipTextModel = localClipText
+        self.clipImageModel = localClipImage
+        self.clipTokenizer = localClipTokenizer
+        self.isMobileCLIP = localIsMobileCLIP
     }
 
     #if canImport(CoreVideo)
@@ -175,7 +189,7 @@ public struct VLMReferee: @unchecked Sendable {
         return nil
     }
     #else
-    public init(bundle: Bundle? = nil, logger: Logger = .shared, cropSize: Int = 224, acceptGate: Double = 0.7) throws { throw Error.modelNotFound }
+    public init(bundle: Bundle? = nil, logger: Utilities.Logger = .shared, cropSize: Int = 224, acceptGate: Double = 0.7) throws { throw Error.modelNotFound }
     #endif
 }
 
@@ -198,9 +212,9 @@ extension VLMReferee {
         do {
             // Find text input/output keys
             let tInputs = textModel.modelDescription.inputDescriptionsByName
-            let tInputKey = tInputs.first(where: { $0.value.type == .multiArray })?.key ?? tInputs.first!.key
+            let tInputKey = tInputs.first(where: { $0.value.type == MLFeatureType.multiArray })?.key ?? tInputs.first!.key
             let tOutputs = textModel.modelDescription.outputDescriptionsByName
-            let tOutputKey = tOutputs.first(where: { $0.value.type == .multiArray })?.key ?? tOutputs.first!.key
+            let tOutputKey = tOutputs.first(where: { $0.value.type == MLFeatureType.multiArray })?.key ?? tOutputs.first!.key
             let textProvider = try MLDictionaryFeatureProvider(dictionary: [tInputKey: MLFeatureValue(multiArray: textArray)])
             let tOut = try textModel.prediction(from: textProvider)
             guard let arr = tOut.featureValue(for: tOutputKey)?.multiArrayValue else { return 0.5 }
@@ -214,9 +228,9 @@ extension VLMReferee {
         var imageFeatures: MLMultiArray
         do {
             let iInputs = imageModel.modelDescription.inputDescriptionsByName
-            let iInputKey = iInputs.first(where: { $0.value.type == .image })?.key ?? iInputs.first!.key
+            let iInputKey = iInputs.first(where: { $0.value.type == MLFeatureType.image })?.key ?? iInputs.first!.key
             let iOutputs = imageModel.modelDescription.outputDescriptionsByName
-            let iOutputKey = iOutputs.first(where: { $0.value.type == .multiArray })?.key ?? iOutputs.first!.key
+            let iOutputKey = iOutputs.first(where: { $0.value.type == MLFeatureType.multiArray })?.key ?? iOutputs.first!.key
             let imgProvider = try MLDictionaryFeatureProvider(dictionary: [iInputKey: MLFeatureValue(pixelBuffer: pixel)])
             let iOut = try imageModel.prediction(from: imgProvider)
             guard let arr = iOut.featureValue(for: iOutputKey)?.multiArrayValue else { return 0.5 }
