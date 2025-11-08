@@ -43,8 +43,8 @@ public final class LabelScrambleVM: ObservableObject {
     private var roundGenerationTask: Task<Void, Never>?
     // Stability gate before generating a round
     private var stableStart: Date?
-    private let stabilityGate: TimeInterval = 1.2
-    private let stabilityMinUnique: Int = 4
+    private let stabilityGate: TimeInterval = 0.8
+    private let stabilityMinUnique: Int = 3
 
     public init(
         roundGenerator: any RoundGenerating = RoundGenerator(),
@@ -80,41 +80,42 @@ public final class LabelScrambleVM: ObservableObject {
         switch phase {
         case .scanning:
             if roundGenerationTask != nil { return }
+            let now = Date()
             // Stability gate: require enough unique labels consistently for a short window
             let unique = Set(detections.map { $0.label.lowercased() }).count
             if unique >= stabilityMinUnique {
-                if stableStart == nil { stableStart = Date() }
+                if stableStart == nil { stableStart = now }
             } else {
                 stableStart = nil
+            }
+
+            // If gate satisfied, attempt immediate generation
+            if let s = stableStart, now.timeIntervalSince(s) >= stabilityGate {
+                let preference = languagePreference
+                roundGenerationTask = Task { [weak self] in
+                    guard let self else { return }
+                    defer { Task { await MainActor.run { self.roundGenerationTask = nil } } }
+                    if let generated = await self.roundGenerator.makeRound(from: detections, languagePreference: preference) {
+                        await self.prepareRound(generated, logMessage: "Round ready with \(generated.objects.count) objects (stable)")
+                        return
+                    }
+                    if let fallback = await self.roundGenerator.makeFallbackRound(from: detections, languagePreference: preference) {
+                        await self.prepareRound(fallback, logMessage: "Fallback round ready (stable) with \(fallback.objects.count) objects")
+                    } else {
+                        await self.presentNoObjectsDetected()
+                    }
+                }
                 return
             }
-            if let s = stableStart, Date().timeIntervalSince(s) < stabilityGate { return }
-            let preference = languagePreference
-            let start = scanningBeganAt
-            roundGenerationTask = Task { [weak self] in
-                guard let self else { return }
-                defer {
-                    Task { await MainActor.run { self.roundGenerationTask = nil } }
-                }
 
-                if let generated = await self.roundGenerator.makeRound(from: detections, languagePreference: preference) {
-                    await self.prepareRound(generated, logMessage: "Round ready with \(generated.objects.count) objects")
-                    return
-                }
-
-                if let start {
-                    let elapsed = Date().timeIntervalSince(start)
-                    let remaining = max(self.scanningTimeout - elapsed, 0)
-                    if remaining > 0 {
-                        let nanos = UInt64((remaining * 1_000_000_000).rounded())
-                        if nanos > 0 {
-                            try? await Task.sleep(nanoseconds: nanos)
-                        }
-                    }
-                    if Task.isCancelled { return }
-
+            // If timeout reached, try fallback even if not stable
+            if let start = scanningBeganAt, now.timeIntervalSince(start) >= scanningTimeout {
+                let preference = languagePreference
+                roundGenerationTask = Task { [weak self] in
+                    guard let self else { return }
+                    defer { Task { await MainActor.run { self.roundGenerationTask = nil } } }
                     if let fallback = await self.roundGenerator.makeFallbackRound(from: detections, languagePreference: preference) {
-                        await self.prepareRound(fallback, logMessage: "Fallback round ready with \(fallback.objects.count) objects")
+                        await self.prepareRound(fallback, logMessage: "Timeout fallback round with \(fallback.objects.count) objects")
                     } else {
                         await self.presentNoObjectsDetected()
                     }
