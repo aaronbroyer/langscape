@@ -34,9 +34,8 @@ public struct DesignSystemPreview: View {
     }
 }
 
-#Preview {
+#Preview(traits: .sizeThatFitsLayout) {
     DesignSystemPreview()
-        .previewLayout(.sizeThatFits)
         .padding()
 }
 #endif
