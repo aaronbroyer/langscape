@@ -17,11 +17,13 @@ public actor CombinedDetector: DetectionService {
 
     public init(logger: Utilities.Logger = .shared) {
         self.logger = logger
-        self.vlm = VLMDetector(logger: logger)
-        // Use new high-recall thresholds (0.15 confidence, 0.35 IoU)
+        // VLM-first: use high maxProposals for dense coverage of thousands of objects
+        // Lower acceptGate to 0.80 for better recall while maintaining quality
+        self.vlm = VLMDetector(logger: logger, cropSize: 224, acceptGate: 0.80, maxProposals: 500)
+        // YOLO as minimal fallback (high-recall thresholds)
         self.yolo = YOLOInterpreter(logger: logger, confidenceThreshold: 0.15, iouThreshold: 0.35)
         self.filter = DetectionFilter()
-        // Initialize VLM referee for verification
+        // Initialize VLM referee for verification of YOLO detections
         self.referee = try? VLMReferee(logger: logger, cropSize: 224, acceptGate: 0.85, minKeepGate: 0.70, maxProposals: 48)
         self.refereeReady = (referee != nil)
     }
@@ -53,85 +55,61 @@ public actor CombinedDetector: DetectionService {
         var results: [Detection] = []
         results.reserveCapacity(5000)
 
-        // Phase 1: Run YOLO with high recall (0.15 threshold)
-        var yoloDetections: [Detection] = []
-        if yoloReady {
+        // Phase 1: VLM-first detection (primary detector for open-vocabulary)
+        var vlmDetections: [Detection] = []
+        if vlmReady {
             do {
-                yoloDetections = try await yolo.detect(on: request)
-                let count = yoloDetections.count
-                await logger.log("CombinedDetector: YOLO returned \(count) detections", level: .debug, category: "DetectionKit.CombinedDetector")
-            } catch {
-                await logger.log("CombinedDetector: YOLO detect failed (\(error)).", level: .error, category: "DetectionKit.CombinedDetector")
-                // Fall back to VLM-only if YOLO fails
-                if vlmReady {
-                    do {
-                        let vlmDets = try await vlm.detect(on: request)
-                        return vlmDets.sorted { $0.confidence > $1.confidence }
-                    } catch {
-                        await logger.log("CombinedDetector: VLM detect also failed (\(error)).", level: .error, category: "DetectionKit.CombinedDetector")
-                        return []
-                    }
-                }
-                return []
-            }
-        } else if vlmReady {
-            // YOLO not ready, fall back to VLM-only
-            do {
-                let vlmDets = try await vlm.detect(on: request)
-                return vlmDets.sorted { $0.confidence > $1.confidence }
+                vlmDetections = try await vlm.detect(on: request)
+                let count = vlmDetections.count
+                await logger.log("CombinedDetector: VLM returned \(count) detections", level: .info, category: "DetectionKit.CombinedDetector")
+                results.append(contentsOf: vlmDetections)
             } catch {
                 await logger.log("CombinedDetector: VLM detect failed (\(error)).", level: .error, category: "DetectionKit.CombinedDetector")
-                return []
             }
-        } else {
+        }
+
+        // Phase 2: Augment with YOLO only if VLM found very few results
+        // YOLO provides dense coverage but limited vocabulary
+        if yoloReady && results.count < 10 {
+            do {
+                let yoloDetections = try await yolo.detect(on: request)
+                let count = yoloDetections.count
+                await logger.log("CombinedDetector: Augmenting with YOLO (\(count) detections)", level: .debug, category: "DetectionKit.CombinedDetector")
+
+                // Filter YOLO detections through VLM referee for verification
+                if refereeReady, let referee = referee {
+                    #if canImport(CoreVideo)
+                    if let pixelBuffer = request.pixelBuffer as? CVPixelBuffer {
+                        let verified = referee.filterBatch(
+                            yoloDetections,
+                            pixelBuffer: pixelBuffer,
+                            orientationRaw: request.imageOrientationRaw,
+                            minConf: 0.15,
+                            maxConf: 1.0,  // Verify all YOLO detections
+                            maxVerify: 500,  // Limit YOLO augmentation
+                            earlyStopThreshold: 5000
+                        )
+                        results.append(contentsOf: verified)
+                        await logger.log("CombinedDetector: Added \(verified.count) verified YOLO detections", level: .debug, category: "DetectionKit.CombinedDetector")
+                    }
+                    #endif
+                } else {
+                    // No referee, apply basic filtering
+                    let filtered = filter.filter(yoloDetections)
+                    // Only accept high-confidence YOLO detections without VLM verification
+                    results.append(contentsOf: filtered.autoAccept)
+                }
+            } catch {
+                await logger.log("CombinedDetector: YOLO augmentation failed (\(error)).", level: .error, category: "DetectionKit.CombinedDetector")
+            }
+        }
+
+        // Phase 3: If both models failed, throw error
+        if results.isEmpty && !vlmReady && !yoloReady {
             throw DetectionError.modelNotFound
         }
 
-        // Phase 2: Apply detection filter to triage
-        let filtered = filter.filter(yoloDetections)
-        await logger.log("CombinedDetector: Filtered into \(filtered.autoAccept.count) high-conf, \(filtered.needsVerification.count) mid-conf, \(filtered.requiresStrictGate.count) low-conf", level: .debug, category: "DetectionKit.CombinedDetector")
-
-        // Phase 3: Auto-accept high-confidence detections (>0.60)
-        results.append(contentsOf: filtered.autoAccept)
-
-        // Phase 4: VLM verification for mid/low confidence detections
-        if refereeReady, let referee = referee {
-            #if canImport(CoreVideo)
-            if let pixelBuffer = request.pixelBuffer as? CVPixelBuffer {
-                // Combine mid and low-confidence detections for verification
-                let toVerify = filtered.needsVerification + filtered.requiresStrictGate
-
-                if !toVerify.isEmpty {
-                    // Use batch filtering with adaptive gates and early stopping
-                    let verified = referee.filterBatch(
-                        toVerify,
-                        pixelBuffer: pixelBuffer,
-                        orientationRaw: request.imageOrientationRaw,
-                        minConf: 0.15,  // Verify detections >= 0.15 confidence
-                        maxConf: 0.70,  // Don't re-verify high confidence (already in autoAccept)
-                        maxVerify: 1000,  // Max detections to verify before early stopping
-                        earlyStopThreshold: 3000  // If we have 3000+ kept, stop verifying
-                    )
-                    results.append(contentsOf: verified)
-                } else {
-                    // No detections to verify
-                }
-            } else {
-                // No pixel buffer available, accept mid-confidence, drop low
-                results.append(contentsOf: filtered.needsVerification)
-            }
-            #else
-            // CoreVideo not available, accept mid-confidence, drop low
-            results.append(contentsOf: filtered.needsVerification)
-            #endif
-        } else {
-            // VLM referee not available, accept mid-confidence, drop low-confidence
-            results.append(contentsOf: filtered.needsVerification)
-            let msg = "VLM referee not available, accepting \(filtered.needsVerification.count) mid-conf, dropping \(filtered.requiresStrictGate.count) low-conf"
-            await logger.log(msg, level: .debug, category: "DetectionKit.CombinedDetector")
-        }
-
-        // Phase 5: Final NMS and sort
+        // Phase 4: Final NMS and sort
         results = nms(results, iou: 0.4)
         results.sort { $0.confidence > $1.confidence }
 
