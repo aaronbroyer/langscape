@@ -11,7 +11,8 @@ struct LangscapeAppMain: App {
     @StateObject private var appSettings: AppSettings
 
     init() {
-        let detectionVM = DetectionVM(service: YOLOInterpreter())
+        // Switch pipeline to VLM-first open-vocabulary detector
+        let detectionVM = DetectionVM(service: VLMDetector())
         _detectionViewModel = StateObject(wrappedValue: detectionVM)
 
         let scrambleVM = LabelScrambleVM()
