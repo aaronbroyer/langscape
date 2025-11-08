@@ -30,28 +30,40 @@ public actor CombinedDetector: DetectionService {
     }
 
     public func prepare() async throws {
+        // Guard against redundant preparation calls
+        guard !vlmReady && !yoloReady else {
+            let vlm = vlmReady
+            let yolo = yoloReady
+            await logger.log("CombinedDetector: Already prepared (VLM: \(vlm), YOLO: \(yolo)), skipping", level: .debug, category: "DetectionKit.CombinedDetector")
+            return
+        }
+
         await logger.log("CombinedDetector: Starting prepare()", level: .info, category: "DetectionKit.CombinedDetector")
 
         // Try VLM first
-        do {
-            await logger.log("CombinedDetector: Preparing VLM...", level: .info, category: "DetectionKit.CombinedDetector")
-            try await vlm.prepare()
-            vlmReady = true
-            await logger.log("CombinedDetector: ✅ VLM READY", level: .info, category: "DetectionKit.CombinedDetector")
-        } catch {
-            vlmReady = false
-            await logger.log("CombinedDetector: ❌ VLM prepare FAILED: \(error)", level: .error, category: "DetectionKit.CombinedDetector")
+        if !vlmReady {
+            do {
+                await logger.log("CombinedDetector: Preparing VLM...", level: .info, category: "DetectionKit.CombinedDetector")
+                try await vlm.prepare()
+                vlmReady = true
+                await logger.log("CombinedDetector: ✅ VLM READY", level: .info, category: "DetectionKit.CombinedDetector")
+            } catch {
+                vlmReady = false
+                await logger.log("CombinedDetector: ❌ VLM prepare FAILED: \(error)", level: .error, category: "DetectionKit.CombinedDetector")
+            }
         }
 
         // Always try YOLO as a fallback/augmenter
-        do {
-            await logger.log("CombinedDetector: Preparing YOLO...", level: .info, category: "DetectionKit.CombinedDetector")
-            try await yolo.prepare()
-            yoloReady = true
-            await logger.log("CombinedDetector: ✅ YOLO READY", level: .info, category: "DetectionKit.CombinedDetector")
-        } catch {
-            yoloReady = false
-            await logger.log("CombinedDetector: ❌ YOLO prepare FAILED: \(error)", level: .error, category: "DetectionKit.CombinedDetector")
+        if !yoloReady {
+            do {
+                await logger.log("CombinedDetector: Preparing YOLO...", level: .info, category: "DetectionKit.CombinedDetector")
+                try await yolo.prepare()
+                yoloReady = true
+                await logger.log("CombinedDetector: ✅ YOLO READY", level: .info, category: "DetectionKit.CombinedDetector")
+            } catch {
+                yoloReady = false
+                await logger.log("CombinedDetector: ❌ YOLO prepare FAILED: \(error)", level: .error, category: "DetectionKit.CombinedDetector")
+            }
         }
 
         let vlmStatus = vlmReady
