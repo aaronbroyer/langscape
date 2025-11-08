@@ -41,6 +41,10 @@ public final class LabelScrambleVM: ObservableObject {
     private var scanningBeganAt: Date?
     private let scanningTimeout: TimeInterval
     private var roundGenerationTask: Task<Void, Never>?
+    // Stability gate before generating a round
+    private var stableStart: Date?
+    private let stabilityGate: TimeInterval = 0.8
+    private let stabilityMinUnique: Int = 3
 
     public init(
         roundGenerator: any RoundGenerating = RoundGenerator(),
@@ -67,6 +71,7 @@ public final class LabelScrambleVM: ObservableObject {
         lastIncorrectLabelID = nil
         overlay = nil
         scanningBeganAt = Date()
+        stableStart = nil
         withAnimationIfAvailable { self.phase = .scanning }
         Task { await logger.log("Entered scanning phase", level: .info, category: "GameKitLS.LabelScrambleVM") }
     }
@@ -75,6 +80,15 @@ public final class LabelScrambleVM: ObservableObject {
         switch phase {
         case .scanning:
             if roundGenerationTask != nil { return }
+            // Stability gate: require enough unique labels consistently for a short window
+            let unique = Set(detections.map { $0.label.lowercased() }).count
+            if unique >= stabilityMinUnique {
+                if stableStart == nil { stableStart = Date() }
+            } else {
+                stableStart = nil
+                return
+            }
+            if let s = stableStart, Date().timeIntervalSince(s) < stabilityGate { return }
             let preference = languagePreference
             let start = scanningBeganAt
             roundGenerationTask = Task { [weak self] in
@@ -106,8 +120,9 @@ public final class LabelScrambleVM: ObservableObject {
                     }
                 }
             }
-        case .ready:
+        case .ready, .playing, .paused:
             guard let currentRound = round else { return }
+            // Keep object positions fresh while playing so drops match the live view
             round = currentRound.updating(with: detections)
         default:
             break

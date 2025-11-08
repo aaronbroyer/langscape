@@ -247,7 +247,7 @@ struct CameraPreviewView: View {
                 placedLabels: gameViewModel.placedLabels,
                 lastIncorrectLabelID: gameViewModel.lastIncorrectLabelID,
                 interactive: interactive,
-                showTargets: true,
+                showTargets: false,
                 frameProvider: { frame(for: $0, in: size) },
                 attemptMatch: { labelID, objectID in
                     gameViewModel.attemptMatch(labelID: labelID, on: objectID)

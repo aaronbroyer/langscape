@@ -49,6 +49,7 @@ public actor LabelEngine: LabelProviding {
 
         if let direct = await vocabularyStore.translation(for: className, preference: preference) {
             cache[key] = direct
+            Task { await logger.log("Vocab hit for \(className) -> \(direct)", level: .debug, category: "GameKitLS.LabelEngine") }
             return direct
         }
 
@@ -67,6 +68,7 @@ public actor LabelEngine: LabelProviding {
         do {
             let translated = try await llmService.translate(sourceText, from: sourceLanguage, to: targetLanguage)
             cache[key] = translated
+            Task { await logger.log("LLM translated \(sourceText) (\(sourceLanguage.rawValue)->\(targetLanguage.rawValue)) -> \(translated)", level: .debug, category: "GameKitLS.LabelEngine") }
             return translated
         } catch {
             let fallback: String
