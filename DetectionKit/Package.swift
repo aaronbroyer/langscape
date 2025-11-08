@@ -35,6 +35,7 @@ let package = Package(
                 .copy("Resources/mobileclip_s0_image.mlpackage"),
                 // Label banks and vocabularies
                 .copy("Resources/labelbank_en.txt"),
+                .copy("Resources/clip-vocab.json"),
                 .copy("Resources/clip-merges.txt")
             ]
         ),
