@@ -28,6 +28,8 @@ public struct VLMReferee: @unchecked Sendable {
     private let clipTextModel: MLModel?
     private let clipImageModel: MLModel?
     private let clipTokenizer: CLIPTokenizer?
+    private let labelBank: [String]?
+    private let textEmbeddings: [[Double]]?
     private let isMobileCLIP: Bool
     private let ciContext = CIContext()
     private let logger: Utilities.Logger
@@ -50,7 +52,10 @@ public struct VLMReferee: @unchecked Sendable {
         var localClipText: MLModel? = nil
         var localClipImage: MLModel? = nil
         var localClipTokenizer: CLIPTokenizer? = nil
+        var localLabelBank: [String]? = nil
+        var localTextEmbeddings: [[Double]]? = nil
         var localIsMobileCLIP = false
+        var pendingLogs: [(String, Utilities.Logger.Level, String)] = []
 
         // Try MobileCLIP (preferred if present)
         if let (txtURL, imgURL) = VLMReferee.locateMobileCLIP(in: resourceBundle) {
@@ -59,7 +64,28 @@ public struct VLMReferee: @unchecked Sendable {
             localClipTokenizer = CLIPTokenizer(bundle: resourceBundle)
             localIsMobileCLIP = (localClipText != nil && localClipImage != nil && localClipTokenizer != nil)
             if localIsMobileCLIP {
-                Task { await logger.log("Loaded MobileCLIP referee: \(imgURL.deletingPathExtension().lastPathComponent)", level: .info, category: "DetectionKit.VLMReferee") }
+                pendingLogs.append(("Loaded MobileCLIP referee: \(imgURL.deletingPathExtension().lastPathComponent)", .info, "DetectionKit.VLMReferee"))
+                // Preload label bank and compute text embeddings for fast per-frame scoring
+                if let bankURL = resourceBundle.url(forResource: "labelbank_en", withExtension: "txt"),
+                   let txt = try? String(contentsOf: bankURL) {
+                    let labels = txt
+                        .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+                        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                        .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+                    if let tModel = localClipText, let tok = localClipTokenizer {
+                        var pairs: [(String, [Double])] = []
+                        pairs.reserveCapacity(labels.count)
+                        for label in labels {
+                            if let emb = Self.embedText(label: label, tokenizer: tok, model: tModel) {
+                                pairs.append((label, emb))
+                            }
+                        }
+                        localLabelBank = pairs.map { $0.0 }
+                        localTextEmbeddings = pairs.map { $0.1 }
+                        let preparedCount = pairs.count
+                        pendingLogs.append(("Prepared \(preparedCount) VLM label embeddings", .info, "DetectionKit.VLMReferee"))
+                    }
+                }
             }
         }
 
@@ -84,7 +110,7 @@ public struct VLMReferee: @unchecked Sendable {
                 localOutputFeature = nil
                 localYesKey = nil
             }
-            Task { await logger.log("Loaded VLM referee: \(url.lastPathComponent)", level: .info, category: "DetectionKit.VLMReferee") }
+            pendingLogs.append(("Loaded VLM referee: \(url.lastPathComponent)", .info, "DetectionKit.VLMReferee"))
         }
 
         // One-time assignment to immutable properties
@@ -96,7 +122,14 @@ public struct VLMReferee: @unchecked Sendable {
         self.clipTextModel = localClipText
         self.clipImageModel = localClipImage
         self.clipTokenizer = localClipTokenizer
+        self.labelBank = localLabelBank
+        self.textEmbeddings = localTextEmbeddings
         self.isMobileCLIP = localIsMobileCLIP
+
+        // Emit logs now that initialization is complete
+        for (msg, lvl, cat) in pendingLogs {
+            Task { await logger.log(msg, level: lvl, category: cat) }
+        }
     }
 
     #if canImport(CoreVideo)
@@ -114,39 +147,62 @@ public struct VLMReferee: @unchecked Sendable {
         var kept: [Detection] = []
         kept.reserveCapacity(detections.count)
         for det in detections {
-            if det.confidence < minConf || det.confidence > maxConf { kept.append(det); continue }
+            if det.confidence > maxConf { kept.append(det); continue }
             let rect = CGRect(x: det.boundingBox.origin.x * W, y: det.boundingBox.origin.y * H, width: det.boundingBox.size.width * W, height: det.boundingBox.size.height * H)
             guard rect.width >= 10, rect.height >= 10 else { kept.append(det); continue }
-            let score = score(label: det.label, base: baseImage, rect: rect)
-            if score >= acceptGate {
-                kept.append(Detection(id: det.id, label: det.label, confidence: max(det.confidence, score), boundingBox: det.boundingBox))
-            } else {
-                Task { await logger.log("VLM filtered \(det.label) (\(Int(score*100))%)", level: .debug, category: "DetectionKit.VLMReferee") }
+            let (bestLabel, score) = refine(label: det.label, base: baseImage, rect: rect)
+            let newLabel = (score >= acceptGate) ? bestLabel : det.label
+            let newConf = (score >= acceptGate) ? max(det.confidence, score) : det.confidence
+            if score < acceptGate {
+                Task { await logger.log("VLM low agreement for \(det.label) (~\(Int(score*100))%)", level: .debug, category: "DetectionKit.VLMReferee") }
             }
+            kept.append(Detection(id: det.id, label: newLabel, confidence: newConf, boundingBox: det.boundingBox))
         }
         return kept
     }
 
-    private func score(label: String, base: CIImage, rect: CGRect) -> Double {
+    private func refine(label: String, base: CIImage, rect: CGRect) -> (String, Double) {
         let crop = base.cropped(to: rect)
         let scaleX = CGFloat(cropSize) / crop.extent.width
         let scaleY = CGFloat(cropSize) / crop.extent.height
         let scaled = crop.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
-        guard let cg = ciContext.createCGImage(scaled, from: CGRect(x: 0, y: 0, width: cropSize, height: cropSize)) else { return 0.5 }
+        guard let cg = ciContext.createCGImage(scaled, from: CGRect(x: 0, y: 0, width: cropSize, height: cropSize)) else { return (label, 0.5) }
         var pb: CVPixelBuffer?
         let attrs: [CFString: Any] = [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true]
         let status = CVPixelBufferCreate(kCFAllocatorDefault, cropSize, cropSize, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pb)
-        guard status == kCVReturnSuccess, let pixel = pb else { return 0.5 }
+        guard status == kCVReturnSuccess, let pixel = pb else { return (label, 0.5) }
         CVPixelBufferLockBaseAddress(pixel, .readOnly)
         let ctx = CGContext(data: CVPixelBufferGetBaseAddress(pixel), width: cropSize, height: cropSize, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixel), space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)
         ctx?.draw(cg, in: CGRect(x: 0, y: 0, width: cropSize, height: cropSize))
         CVPixelBufferUnlockBaseAddress(pixel, .readOnly)
 
         if isMobileCLIP, let clipTextModel, let clipImageModel, let clipTokenizer {
-            return scoreMobileCLIP(label: label, pixel: pixel, textModel: clipTextModel, imageModel: clipImageModel, tokenizer: clipTokenizer)
+            // Use CLIP in two ways:
+            // 1) Binary confirmation of the YOLO label (fallback if no label bank)
+            // 2) If a label bank is available, pick best-matching label and boost confidence
+            if let bank = labelBank, let tEmb = textEmbeddings {
+                if let imgVec = Self.embedImage(pixel: pixel, model: clipImageModel) {
+                    // Cosine sim → [0,1]
+                    var bestIdx = 0
+                    var bestSim = -1.0
+                    for (i, tv) in tEmb.enumerated() {
+                        let sim = Self.cosine01(imgVec, tv)
+                        if sim > bestSim { bestSim = sim; bestIdx = i }
+                    }
+                    let topLabel = bank[bestIdx]
+                    let sim = bestSim
+                    // Keep/Relabel policy: if similarity is strong, relabel and boost conf
+                    if sim >= acceptGate {
+                        return (topLabel, sim)
+                    }
+                    // Else fall back to binary prompt on the original label
+                    return (label, scoreMobileCLIP(label: label, pixel: pixel, textModel: clipTextModel, imageModel: clipImageModel, tokenizer: clipTokenizer))
+                }
+            }
+            return (label, scoreMobileCLIP(label: label, pixel: pixel, textModel: clipTextModel, imageModel: clipImageModel, tokenizer: clipTokenizer))
         }
 
-        guard let model, let imageFeature, let textFeature else { return 0.5 }
+        guard let model, let imageFeature, let textFeature else { return (label, 0.5) }
         let prompt = "a photo of a \(label)"
         do {
             let provider = try MLDictionaryFeatureProvider(dictionary: [
@@ -154,16 +210,16 @@ public struct VLMReferee: @unchecked Sendable {
                 textFeature: MLFeatureValue(string: prompt)
             ])
             let out = try model.prediction(from: provider)
-            if let key = outputFeature, let val = out.featureValue(for: key)?.doubleValue { return max(0.0, min(1.0, val)) }
+            if let key = outputFeature, let val = out.featureValue(for: key)?.doubleValue { return (label, max(0.0, min(1.0, val))) }
             if let key = outputFeature, let dict = out.featureValue(for: key)?.dictionaryValue as? [String: NSNumber] {
-                if let k = yesKey, let v = dict[k]?.doubleValue { return v }
-                return dict.values.map { $0.doubleValue }.max() ?? 0.5
+                if let k = yesKey, let v = dict[k]?.doubleValue { return (label, v) }
+                return (label, dict.values.map { $0.doubleValue }.max() ?? 0.5)
             }
         } catch {
             Task { await logger.log("VLM prediction failed: \(error.localizedDescription)", level: .error, category: "DetectionKit.VLMReferee") }
-            return 0.5
+            return (label, 0.5)
         }
-        return 0.5
+        return (label, 0.5)
     }
     #endif
 
@@ -196,6 +252,59 @@ public struct VLMReferee: @unchecked Sendable {
 #if canImport(CoreML)
 import Accelerate
 extension VLMReferee {
+    // MARK: - Embedding helpers
+    private static func embedText(label: String, tokenizer: CLIPTokenizer, model: MLModel) -> [Double]? {
+        let tokens = tokenizer.encodeFull("a photo of a \(label)")
+        guard let textArray = try? MLMultiArray(shape: [1, NSNumber(value: tokenizer.contextLength)], dataType: .int32) else { return nil }
+        for (i, t) in tokens.enumerated() { textArray[[0, NSNumber(value: i)]] = NSNumber(value: Int32(t)) }
+        do {
+            let tInputs = model.modelDescription.inputDescriptionsByName
+            let tKey = tInputs.first(where: { $0.value.type == MLFeatureType.multiArray })?.key ?? tInputs.first!.key
+            let tOutputs = model.modelDescription.outputDescriptionsByName
+            let oKey = tOutputs.first(where: { $0.value.type == MLFeatureType.multiArray })?.key ?? tOutputs.first!.key
+            let prov = try MLDictionaryFeatureProvider(dictionary: [tKey: MLFeatureValue(multiArray: textArray)])
+            let out = try model.prediction(from: prov)
+            guard let arr = out.featureValue(for: oKey)?.multiArrayValue else { return nil }
+            return l2norm(toDoubles(arr))
+        } catch { return nil }
+    }
+
+    private static func embedImage(pixel: CVPixelBuffer, model: MLModel) -> [Double]? {
+        do {
+            let iInputs = model.modelDescription.inputDescriptionsByName
+            let iKey = iInputs.first(where: { $0.value.type == MLFeatureType.image })?.key ?? iInputs.first!.key
+            let iOutputs = model.modelDescription.outputDescriptionsByName
+            let oKey = iOutputs.first(where: { $0.value.type == MLFeatureType.multiArray })?.key ?? iOutputs.first!.key
+            let prov = try MLDictionaryFeatureProvider(dictionary: [iKey: MLFeatureValue(pixelBuffer: pixel)])
+            let out = try model.prediction(from: prov)
+            guard let arr = out.featureValue(for: oKey)?.multiArrayValue else { return nil }
+            return l2norm(toDoubles(arr))
+        } catch { return nil }
+    }
+
+    private static func toDoubles(_ m: MLMultiArray) -> [Double] {
+        var out = [Double](repeating: 0, count: m.count)
+        switch m.dataType {
+        case .double: for i in 0..<m.count { out[i] = m[i].doubleValue }
+        case .float32, .float16: for i in 0..<m.count { out[i] = Double(truncating: m[i]) }
+        default: for i in 0..<m.count { out[i] = m[i].doubleValue }
+        }
+        return out
+    }
+
+    private static func l2norm(_ v: [Double]) -> [Double] {
+        var sum = 0.0
+        for x in v { sum += x*x }
+        let d = max(sqrt(sum), 1e-9)
+        return v.map { $0 / d }
+    }
+
+    private static func cosine01(_ a: [Double], _ b: [Double]) -> Double {
+        let n = min(a.count, b.count)
+        var dot = 0.0
+        for i in 0..<n { dot += a[i]*b[i] }
+        return max(0.0, min(1.0, 0.5 * (dot + 1.0)))
+    }
     private func scoreMobileCLIP(label: String, pixel: CVPixelBuffer, textModel: MLModel, imageModel: MLModel, tokenizer: CLIPTokenizer) -> Double {
         // Build text tokens (1 x 77)
         let prompt = "a photo of a \(label)"
