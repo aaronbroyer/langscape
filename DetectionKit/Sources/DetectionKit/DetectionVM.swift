@@ -46,6 +46,7 @@ public final class DetectionVM: ObservableObject {
 
     private let logger: Logger
     private let processor: DetectionProcessor
+    private let referee: VLMReferee?
     private let refiner: ClassificationRefiner?
     private let errorStore: ErrorStore
     private var lastSubmissionDate: Date = .distantPast
@@ -64,6 +65,9 @@ public final class DetectionVM: ObservableObject {
         self.throttleInterval = throttleInterval
         self.logger = logger
         self.processor = DetectionProcessor(service: service)
+        // Optional MobileVLM-style referee (filters mid-confidence detections)
+        self.referee = try? VLMReferee(cropSize: 224, acceptGate: 0.70)
+        // Optional image classifier for second-stage label refinement
         self.refiner = try? ClassificationRefiner()
         self.fpsWindow = fpsWindow
         self.errorStore = errorStore
@@ -93,6 +97,17 @@ public final class DetectionVM: ObservableObject {
             do {
                 var detections = try await processor.process(request)
                 #if canImport(CoreVideo)
+                // First, optionally verify mid-confidence boxes using the VLM referee
+                if let referee = viewModel.referee, let pb = request.pixelBuffer as? CVPixelBuffer {
+                    detections = referee.filter(
+                        detections,
+                        pixelBuffer: pb,
+                        orientationRaw: request.imageOrientationRaw,
+                        minConf: 0.30,
+                        maxConf: 0.70
+                    )
+                }
+                // Then, optionally refine labels via an image classifier
                 if let refiner = viewModel.refiner, let pb = request.pixelBuffer as? CVPixelBuffer {
                     detections = refiner.refine(detections, pixelBuffer: pb, orientationRaw: request.imageOrientationRaw)
                 }
