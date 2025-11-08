@@ -9,6 +9,35 @@ import CoreML
 import Vision
 #endif
 
+#if canImport(CoreML)
+/// Feature provider for YOLOv8 model threshold configuration
+private class YOLOThresholdProvider: NSObject, MLFeatureProvider {
+    let confidenceThreshold: Double
+    let iouThreshold: Double
+
+    var featureNames: Set<String> {
+        return ["iouThreshold", "confidenceThreshold"]
+    }
+
+    init(confidenceThreshold: Double, iouThreshold: Double) {
+        self.confidenceThreshold = confidenceThreshold
+        self.iouThreshold = iouThreshold
+        super.init()
+    }
+
+    func featureValue(for featureName: String) -> MLFeatureValue? {
+        switch featureName {
+        case "iouThreshold":
+            return MLFeatureValue(double: iouThreshold)
+        case "confidenceThreshold":
+            return MLFeatureValue(double: confidenceThreshold)
+        default:
+            return nil
+        }
+    }
+}
+#endif
+
 /// YOLO Interpreter backed by Core ML. If a YOLOv8 CoreML model is present in the
 /// package resources (for example, "YOLOv8n.mlmodelc"), it runs real inference via Vision.
 /// Otherwise it falls back to a lightweight mock that returns a single detection.
@@ -22,12 +51,21 @@ public actor YOLOInterpreter: DetectionService {
 
     private let logger: Logger
     private var backend: Backend = .mock
-    private let confidenceThreshold: Double = 0.35
-    private let maxDetections: Int = 25
+    private let maxDetections: Int = 50
     private var isPrepared = false
 
-    public init(logger: Logger = .shared) {
+    // NMS thresholds passed to the model (not client-side filtering)
+    public let modelConfidenceThreshold: Double
+    public let modelIouThreshold: Double
+
+    public init(
+        logger: Logger = .shared,
+        confidenceThreshold: Double = 0.5,
+        iouThreshold: Double = 0.45
+    ) {
         self.logger = logger
+        self.modelConfidenceThreshold = confidenceThreshold
+        self.modelIouThreshold = iouThreshold
     }
 
     // MARK: - Lifecycle
@@ -37,15 +75,29 @@ public actor YOLOInterpreter: DetectionService {
         #if canImport(Vision)
         if let modelURL = try? await locateModel() {
             do {
-                let mlModel = try MLModel(contentsOf: modelURL)
+                var config = MLModelConfiguration()
+                #if os(iOS)
+                if #available(iOS 16.0, *) {
+                    config.computeUnits = .all
+                }
+                #endif
+                let mlModel = try MLModel(contentsOf: modelURL, configuration: config)
                 let visionModel = try VNCoreMLModel(for: mlModel)
+
+                // Configure NMS thresholds via feature provider
+                let thresholdProvider = YOLOThresholdProvider(
+                    confidenceThreshold: modelConfidenceThreshold,
+                    iouThreshold: modelIouThreshold
+                )
+                visionModel.featureProvider = thresholdProvider
+
                 // Only set inputImageFeatureName when the feature is actually an image.
                 if let imageInput = mlModel.modelDescription.inputDescriptionsByName.first(where: { $0.value.type == .image })?.key {
                     visionModel.inputImageFeatureName = imageInput
                 }
                 backend = .vision(model: visionModel)
                 isPrepared = true
-                await logger.log("Loaded YOLO model: \(modelURL.lastPathComponent)", level: .info, category: "DetectionKit.YOLOInterpreter")
+                await logger.log("Loaded YOLO model: \(modelURL.lastPathComponent) with confidence=\(modelConfidenceThreshold), iou=\(modelIouThreshold)", level: .info, category: "DetectionKit.YOLOInterpreter")
                 return
             } catch {
                 await logger.log("Failed to load YOLO model: \(error.localizedDescription). Falling back to mock.", level: .error, category: "DetectionKit.YOLOInterpreter")
@@ -92,7 +144,8 @@ public actor YOLOInterpreter: DetectionService {
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
             #endif
             let request = VNCoreMLRequest(model: model)
-            request.imageCropAndScaleOption = .scaleFill
+            // Preserve aspect ratio to avoid geometric distortion during resizing
+            request.imageCropAndScaleOption = .scaleFit
 
             do {
                 try handler.perform([request])
@@ -101,10 +154,10 @@ public actor YOLOInterpreter: DetectionService {
             }
 
             let results = (request.results as? [VNRecognizedObjectObservation]) ?? []
-            let filtered = results.compactMap { obs -> Detection? in
+            // Model already filtered by confidence threshold via featureProvider
+            let detections = results.compactMap { obs -> Detection? in
                 guard let best = obs.labels.max(by: { $0.confidence < $1.confidence }) else { return nil }
                 let confidence = Double(best.confidence)
-                guard confidence >= confidenceThreshold else { return nil }
                 let r = obs.boundingBox
                 let normalized = NormalizedRect(
                     origin: .init(x: Double(r.origin.x), y: Double(1 - r.origin.y - r.size.height)),
@@ -113,7 +166,7 @@ public actor YOLOInterpreter: DetectionService {
                 return Detection(label: best.identifier, confidence: confidence, boundingBox: normalized)
             }
             .sorted(by: { $0.confidence > $1.confidence })
-            return Array(filtered.prefix(maxDetections))
+            return Array(detections.prefix(maxDetections))
         #endif
         }
     }
@@ -122,8 +175,8 @@ public actor YOLOInterpreter: DetectionService {
     private func locateModel() async throws -> URL? {
         // Search for common YOLOv8 compiled model names in the SPM module bundle.
         let candidates = [
-            // Prefer specific models first; 's' before 'n'
-            "YOLOv8s", "YOLOv8", "YOLOv8n", "YOLOv8m", "YOLOv8l", "best", "Model"
+            // Prefer most-accurate we ship first
+            "YOLOv8m", "YOLOv8l", "YOLOv8s", "YOLOv8", "YOLOv8n", "best", "Model"
         ]
 
         for name in candidates {

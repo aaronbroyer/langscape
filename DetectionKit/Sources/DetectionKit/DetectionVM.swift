@@ -51,7 +51,7 @@ public final class DetectionVM: ObservableObject {
 
     public init(
         service: any DetectionService,
-        throttleInterval: TimeInterval = 0.08,
+        throttleInterval: TimeInterval = 0.06,
         fpsWindow: TimeInterval = 1,
         logger: Logger = .shared,
         errorStore: ErrorStore = .shared
@@ -91,11 +91,8 @@ public final class DetectionVM: ObservableObject {
                     viewModel.lastError = nil
                     viewModel.registerFrame(timestamp: request.timestamp)
                 }
-                await logger.log(
-                    "Processed frame \(request.id) with \(detections.count) detections.",
-                    level: .debug,
-                    category: "DetectionKit.DetectionVM"
-                )
+                let labels = detections.map { "\($0.label)(\(Int($0.confidence*100))%)" }.joined(separator: ", ")
+                await logger.log("Processed frame \(request.id) with \(detections.count) detections: [\(labels)]", level: .debug, category: "DetectionKit.DetectionVM")
             } catch let error as DetectionError {
                 await MainActor.run {
                     viewModel.lastError = error

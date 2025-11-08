@@ -110,9 +110,9 @@ public struct RoundGenerator: RoundGenerating {
 
     public init(
         minimumObjectCount: Int = 3,
-        maximumObjectCount: Int = 6,
+        maximumObjectCount: Int = 7,
         labelProvider: any LabelProviding = LabelEngine(),
-        minConfidence: Double = 0.5,
+        minConfidence: Double = 0.35,
         logger: Logger = .shared
     ) {
         self.minimumObjectCount = minimumObjectCount
@@ -142,7 +142,7 @@ public struct RoundGenerator: RoundGenerating {
     }
 
     public func makeFallbackRound(from detections: [Detection], languagePreference: LanguagePreference) async -> Round? {
-        let grouped = Dictionary(grouping: detections.filter { $0.confidence >= minConfidence * 0.8 }, by: { $0.label.lowercased() })
+        let grouped = Dictionary(grouping: detections.filter { $0.confidence >= max(0.2, minConfidence * 0.8) }, by: { $0.label.lowercased() })
         let unique = grouped.values.compactMap { $0.max(by: { $0.confidence < $1.confidence }) }
         guard !unique.isEmpty else { return nil }
 
@@ -165,7 +165,7 @@ public struct RoundGenerator: RoundGenerating {
             let h = detection.boundingBox.size.height
             let area = w * h
             let aspect = max(w, h) / max(0.0001, min(w, h))
-            guard area >= 0.012 && aspect <= 4.5 else { continue }
+            guard area >= 0.006 && aspect <= 6.0 else { continue }
             seen.insert(key)
             results.append(detection)
         }

@@ -67,7 +67,12 @@ public actor VocabularyStore {
     }
 
     public func entry(for className: String) -> Entry? {
-        entriesByClass[className.normalizedKey()]
+        let key = className.normalizedKey()
+        if let direct = entriesByClass[key] { return direct }
+        if let alias = VocabularyStore.aliases[key], let mapped = entriesByClass[alias] {
+            return mapped
+        }
+        return nil
     }
 
     public func translation(for className: String, preference: LanguagePreference) -> String? {
@@ -106,6 +111,23 @@ public actor VocabularyStore {
             return [:]
         }
     }
+
+    // Common label aliases found across model variants; map to COCO names used in the dataset
+    private static let aliases: [String: String] = [
+        "sofa": "couch",
+        "tvmonitor": "tv",
+        "tv monitor": "tv",
+        "television": "tv",
+        "cellphone": "cell phone",
+        "mobile phone": "cell phone",
+        "diningtable": "dining table",
+        "pottedplant": "potted plant",
+        "hair dryer": "hair drier",
+        "teddy": "teddy bear",
+        "wineglass": "wine glass",
+        "sportsball": "sports ball",
+        "hotdog": "hot dog",
+    ]
 }
 
 private extension String {
