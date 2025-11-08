@@ -162,10 +162,10 @@ private actor DetectionProcessor {
     private var prepared = false
     // Temporal smoothing state
     private var tracks: [UUID: Track] = [:]
-    private let iouThreshold: Double = 0.25
-    private let requiredHits: Int = 2
+    private let iouThreshold: Double = 0.40
+    private let requiredHits: Int = 3
     private let maxTrackAge: TimeInterval = 0.6
-    private let smoothingAlpha: Double = 0.6 // EMA for bbox/confidence
+    private let smoothingAlpha: Double = 0.5 // EMA for bbox/confidence
 
     init(service: any DetectionService) {
         self.service = service
@@ -184,7 +184,8 @@ private actor DetectionProcessor {
     // MARK: - Stabilization
     private struct Track {
         let id: UUID
-        let label: String
+        var label: String
+        var labelCounts: [String: Int]
         var bbox: NormalizedRect
         var confidence: Double
         var hits: Int
@@ -192,16 +193,16 @@ private actor DetectionProcessor {
     }
 
     private func stabilize(detections: [Detection], timestamp: Date) -> [Detection] {
-        // Step 1: Associate detections to existing tracks by label + IoU
+        // Step 1: Associate detections to existing tracks by IoU (label-agnostic)
         var unmatchedTrackIDs = Set(tracks.keys)
 
         for det in detections {
-            // Find best matching track with same label
+            // Find best matching track by IoU regardless of label
             var bestID: UUID?
             var bestIoU: Double = 0
-            for (id, tr) in tracks where tr.label.caseInsensitiveCompare(det.label) == .orderedSame {
-                let iou = iou(tr.bbox, det.boundingBox)
-                if iou > bestIoU { bestIoU = iou; bestID = id }
+            for (id, tr) in tracks {
+                let iouVal = iou(tr.bbox, det.boundingBox)
+                if iouVal > bestIoU { bestIoU = iouVal; bestID = id }
             }
 
             if let id = bestID, bestIoU >= iouThreshold, var tr = tracks[id] {
@@ -210,12 +211,28 @@ private actor DetectionProcessor {
                 tr.confidence = tr.confidence * (1 - smoothingAlpha) + det.confidence * smoothingAlpha
                 tr.hits += 1
                 tr.lastTimestamp = timestamp
+                // Label majority voting
+                let key = det.label.lowercased()
+                var counts = tr.labelCounts
+                counts[key, default: 0] += 1
+                tr.labelCounts = counts
+                if let (bestLabel, _) = counts.max(by: { $0.value < $1.value }) {
+                    tr.label = bestLabel
+                }
                 tracks[id] = tr
                 unmatchedTrackIDs.remove(id)
             } else {
                 // New track
                 let id = det.id
-                tracks[id] = Track(id: id, label: det.label, bbox: det.boundingBox, confidence: det.confidence, hits: 1, lastTimestamp: timestamp)
+                tracks[id] = Track(
+                    id: id,
+                    label: det.label.lowercased(),
+                    labelCounts: [det.label.lowercased(): 1],
+                    bbox: det.boundingBox,
+                    confidence: det.confidence,
+                    hits: 1,
+                    lastTimestamp: timestamp
+                )
             }
         }
 

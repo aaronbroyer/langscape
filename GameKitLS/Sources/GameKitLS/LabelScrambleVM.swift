@@ -43,8 +43,8 @@ public final class LabelScrambleVM: ObservableObject {
     private var roundGenerationTask: Task<Void, Never>?
     // Stability gate before generating a round
     private var stableStart: Date?
-    private let stabilityGate: TimeInterval = 0.8
-    private let stabilityMinUnique: Int = 3
+    private let stabilityGate: TimeInterval = 1.2
+    private let stabilityMinUnique: Int = 4
 
     public init(
         roundGenerator: any RoundGenerating = RoundGenerator(),
