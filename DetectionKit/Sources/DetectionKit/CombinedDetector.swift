@@ -1,13 +1,19 @@
 import Foundation
 import Utilities
 
+#if canImport(CoreVideo)
+import CoreVideo
+#endif
+
 public actor CombinedDetector: DetectionService {
     private let logger: Utilities.Logger
     private let vlm: VLMDetector
     private let yolo: YOLOInterpreter
     private let filter: DetectionFilter
+    private let referee: VLMReferee?
     private var vlmReady = false
     private var yoloReady = false
+    private var refereeReady = false
 
     public init(logger: Utilities.Logger = .shared) {
         self.logger = logger
@@ -15,6 +21,9 @@ public actor CombinedDetector: DetectionService {
         // Use new high-recall thresholds (0.15 confidence, 0.35 IoU)
         self.yolo = YOLOInterpreter(logger: logger, confidenceThreshold: 0.15, iouThreshold: 0.35)
         self.filter = DetectionFilter()
+        // Initialize VLM referee for verification
+        self.referee = try? VLMReferee(logger: logger, cropSize: 224, acceptGate: 0.85, minKeepGate: 0.70, maxProposals: 48)
+        self.refereeReady = (referee != nil)
     }
 
     public func prepare() async throws {
@@ -85,17 +94,41 @@ public actor CombinedDetector: DetectionService {
         // Phase 3: Auto-accept high-confidence detections (>0.60)
         results.append(contentsOf: filtered.autoAccept)
 
-        // Phase 4: VLM verification for mid/low confidence (if VLM available)
-        // Note: Full VLM verification will be implemented in Phase 2 of the migration
-        // For now, we accept mid-confidence detections and drop low-confidence ones
-        if vlmReady {
-            // TODO: Implement batch VLM verification in Phase 2
-            // For now, accept mid-confidence detections as-is
+        // Phase 4: VLM verification for mid/low confidence detections
+        if refereeReady, let referee = referee {
+            #if canImport(CoreVideo)
+            if let pixelBuffer = request.pixelBuffer as? CVPixelBuffer {
+                // Combine mid and low-confidence detections for verification
+                let toVerify = filtered.needsVerification + filtered.requiresStrictGate
+
+                if !toVerify.isEmpty {
+                    // Use batch filtering with adaptive gates and early stopping
+                    let verified = referee.filterBatch(
+                        toVerify,
+                        pixelBuffer: pixelBuffer,
+                        orientationRaw: request.imageOrientationRaw,
+                        minConf: 0.15,  // Verify detections >= 0.15 confidence
+                        maxConf: 0.70,  // Don't re-verify high confidence (already in autoAccept)
+                        maxVerify: 1000,  // Max detections to verify before early stopping
+                        earlyStopThreshold: 3000  // If we have 3000+ kept, stop verifying
+                    )
+                    results.append(contentsOf: verified)
+                } else {
+                    // No detections to verify
+                }
+            } else {
+                // No pixel buffer available, accept mid-confidence, drop low
+                results.append(contentsOf: filtered.needsVerification)
+            }
+            #else
+            // CoreVideo not available, accept mid-confidence, drop low
             results.append(contentsOf: filtered.needsVerification)
-            // Drop low-confidence detections for now (will verify in Phase 2)
+            #endif
         } else {
-            // No VLM available, accept mid-confidence, drop low
+            // VLM referee not available, accept mid-confidence, drop low-confidence
             results.append(contentsOf: filtered.needsVerification)
+            let msg = "VLM referee not available, accepting \(filtered.needsVerification.count) mid-conf, dropping \(filtered.requiresStrictGate.count) low-conf"
+            await logger.log(msg, level: .debug, category: "DetectionKit.CombinedDetector")
         }
 
         // Phase 5: Final NMS and sort
