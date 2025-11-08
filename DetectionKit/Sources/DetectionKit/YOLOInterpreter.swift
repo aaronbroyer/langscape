@@ -175,8 +175,8 @@ public actor YOLOInterpreter: DetectionService {
     private func locateModel() async throws -> URL? {
         // Search for common YOLOv8 compiled model names in the SPM module bundle.
         let candidates = [
-            // Prefer most-accurate we ship first
-            "YOLOv8m", "YOLOv8l", "YOLOv8s", "YOLOv8", "YOLOv8n", "best", "Model"
+            // Prefer distilled OVD student first, then larger YOLO variants
+            "YOLOv8-ovd", "YOLOv8l", "YOLOv8m", "YOLOv8s", "YOLOv8", "YOLOv8n", "best", "Model"
         ]
 
         for name in candidates {

@@ -1,0 +1,5 @@
+*.mlpackage filter=lfs diff=lfs merge=lfs -text
+*.mlmodelc filter=lfs diff=lfs merge=lfs -text
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+DetectionKit/Sources/DetectionKit/Resources/** filter=lfs diff=lfs merge=lfs -text
