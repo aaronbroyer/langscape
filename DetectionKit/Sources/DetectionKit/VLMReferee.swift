@@ -276,7 +276,10 @@ public struct VLMReferee: @unchecked Sendable {
                 }
             }
         }
-        if !added.isEmpty { Task { await logger.log("VLM proposals added: \(added.count)", level: .info, category: "DetectionKit.VLMReferee") } }
+        if !added.isEmpty {
+            let proposalsCount = added.count
+            Task { await logger.log("VLM proposals added: \(proposalsCount)", level: .info, category: "DetectionKit.VLMReferee") }
+        }
         return added
     }
 
