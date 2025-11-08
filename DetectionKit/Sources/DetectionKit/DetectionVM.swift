@@ -98,7 +98,8 @@ public final class DetectionVM: ObservableObject {
                 var detections = try await processor.process(request)
                 #if canImport(CoreVideo)
                 // First, optionally verify mid-confidence boxes using the VLM referee
-                if let referee = viewModel.referee, let pb = request.pixelBuffer as? CVPixelBuffer {
+                if let referee = viewModel.referee {
+                    let pb: CVPixelBuffer = request.pixelBuffer
                     detections = referee.filter(
                         detections,
                         pixelBuffer: pb,
@@ -108,7 +109,8 @@ public final class DetectionVM: ObservableObject {
                     )
                 }
                 // Then, optionally refine labels via an image classifier
-                if let refiner = viewModel.refiner, let pb = request.pixelBuffer as? CVPixelBuffer {
+                if let refiner = viewModel.refiner {
+                    let pb: CVPixelBuffer = request.pixelBuffer
                     detections = refiner.refine(detections, pixelBuffer: pb, orientationRaw: request.imageOrientationRaw)
                 }
                 #endif
