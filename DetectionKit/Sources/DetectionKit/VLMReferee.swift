@@ -35,12 +35,16 @@ public struct VLMReferee: @unchecked Sendable {
     private let logger: Utilities.Logger
     private let cropSize: Int
     private let acceptGate: Double
+    private let minKeepGate: Double
+    private let maxProposals: Int
 
-    public init(bundle: Bundle? = nil, logger: Utilities.Logger = .shared, cropSize: Int = 224, acceptGate: Double = 0.7) throws {
+    public init(bundle: Bundle? = nil, logger: Utilities.Logger = .shared, cropSize: Int = 224, acceptGate: Double = 0.85, minKeepGate: Double = 0.70, maxProposals: Int = 48) throws {
         let resourceBundle = bundle ?? Bundle.module
         self.logger = logger
         self.cropSize = cropSize
         self.acceptGate = acceptGate
+        self.minKeepGate = minKeepGate
+        self.maxProposals = maxProposals
 
         // Prepare locals for one-time assignment to lets
         var localModel: MLModel? = nil
@@ -153,10 +157,23 @@ public struct VLMReferee: @unchecked Sendable {
             let (bestLabel, score) = refine(label: det.label, base: baseImage, rect: rect)
             let newLabel = (score >= acceptGate) ? bestLabel : det.label
             let newConf = (score >= acceptGate) ? max(det.confidence, score) : det.confidence
-            if score < acceptGate {
+            if score < minKeepGate {
+                // Drop boxes that the VLM strongly disagrees with to improve precision
+                Task { await logger.log("VLM dropped \(det.label) (~\(Int(score*100))%)", level: .debug, category: "DetectionKit.VLMReferee") }
+                continue
+            } else if score < acceptGate {
                 Task { await logger.log("VLM low agreement for \(det.label) (~\(Int(score*100))%)", level: .debug, category: "DetectionKit.VLMReferee") }
             }
             kept.append(Detection(id: det.id, label: newLabel, confidence: newConf, boundingBox: det.boundingBox))
+        }
+        // If recall is still low, augment with CLIP proposals from a coarse grid
+        if kept.count < 4,
+           isMobileCLIP,
+           let clipImageModel,
+           let bank = labelBank,
+           let tEmb = textEmbeddings {
+            let proposals = proposeFromGrid(base: baseImage, frameW: W, frameH: H, existing: kept.map { $0.boundingBox }, bank: bank, textEmb: tEmb, imageModel: clipImageModel)
+            return mergeDetections(kept, with: proposals)
         }
         return kept
     }
@@ -201,7 +218,7 @@ public struct VLMReferee: @unchecked Sendable {
             }
             return (label, scoreMobileCLIP(label: label, pixel: pixel, textModel: clipTextModel, imageModel: clipImageModel, tokenizer: clipTokenizer))
         }
-
+        
         guard let model, let imageFeature, let textFeature else { return (label, 0.5) }
         let prompt = "a photo of a \(label)"
         do {
@@ -221,6 +238,105 @@ public struct VLMReferee: @unchecked Sendable {
         }
         return (label, 0.5)
     }
+
+    // MARK: - Grid proposals with CLIP
+    private func proposeFromGrid(base: CIImage, frameW: Double, frameH: Double, existing: [NormalizedRect], bank: [String], textEmb: [[Double]], imageModel: MLModel) -> [Detection] {
+        // Multi-scale coarse grid: prefer medium/small boxes
+        let scales: [Double] = [0.25, 0.33]
+        var rects: [CGRect] = []
+        for s in scales {
+            let bw = frameW * s
+            let bh = frameH * s
+            let strideX = bw * 0.5
+            let strideY = bh * 0.5
+            var y: Double = 0
+            while y + bh <= frameH { var x: Double = 0; while x + bw <= frameW {
+                rects.append(CGRect(x: x, y: y, width: bw, height: bh))
+                x += strideX
+            }; y += strideY }
+        }
+        // Limit candidates
+        if rects.count > maxProposals { rects = Array(rects.prefix(maxProposals)) }
+        var added: [Detection] = []
+        added.reserveCapacity(rects.count)
+        for r in rects {
+            guard r.width >= 10, r.height >= 10 else { continue }
+            // Skip if overlaps an existing detection significantly
+            let nr = toNormalized(r, frameW: frameW, frameH: frameH)
+            var overlaps = false
+            for e in existing { if iouNorm(nr, e) >= 0.4 { overlaps = true; break } }
+            if overlaps { continue }
+            // Score with CLIP
+            let (label, sim) = scoreLabelBank(base: base, rect: r, bank: bank, textEmb: textEmb, imageModel: imageModel)
+            if sim >= max(acceptGate, 0.75) {
+                let det = Detection(label: label, confidence: sim, boundingBox: nr)
+                // NMS vs what we've already added
+                if added.allSatisfy({ iouNorm($0.boundingBox, nr) < 0.4 }) {
+                    added.append(det)
+                }
+            }
+        }
+        if !added.isEmpty { Task { await logger.log("VLM proposals added: \(added.count)", level: .info, category: "DetectionKit.VLMReferee") } }
+        return added
+    }
+
+    private func scoreLabelBank(base: CIImage, rect: CGRect, bank: [String], textEmb: [[Double]], imageModel: MLModel) -> (String, Double) {
+        // Crop and embed image
+        let crop = base.cropped(to: rect)
+        let scaleX = CGFloat(cropSize) / crop.extent.width
+        let scaleY = CGFloat(cropSize) / crop.extent.height
+        let scaled = crop.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+        guard let cg = ciContext.createCGImage(scaled, from: CGRect(x: 0, y: 0, width: cropSize, height: cropSize)) else { return ("", 0.0) }
+        var pb: CVPixelBuffer?
+        let attrs: [CFString: Any] = [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true]
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, cropSize, cropSize, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pb)
+        guard status == kCVReturnSuccess, let pixel = pb else { return ("", 0.0) }
+        CVPixelBufferLockBaseAddress(pixel, .readOnly)
+        let ctx = CGContext(data: CVPixelBufferGetBaseAddress(pixel), width: cropSize, height: cropSize, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixel), space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)
+        ctx?.draw(cg, in: CGRect(x: 0, y: 0, width: cropSize, height: cropSize))
+        CVPixelBufferUnlockBaseAddress(pixel, .readOnly)
+
+        guard let imgVec = Self.embedImage(pixel: pixel, model: imageModel) else { return ("", 0.0) }
+        var bestIdx = 0
+        var bestSim = -1.0
+        for (i, tv) in textEmb.enumerated() {
+            let sim = Self.cosine01(imgVec, tv)
+            if sim > bestSim { bestSim = sim; bestIdx = i }
+        }
+        return (bank[bestIdx], bestSim)
+    }
+
+    private func toNormalized(_ r: CGRect, frameW: Double, frameH: Double) -> NormalizedRect {
+        return NormalizedRect(
+            origin: .init(x: Double(r.origin.x) / frameW, y: Double(r.origin.y) / frameH),
+            size: .init(width: Double(r.size.width) / frameW, height: Double(r.size.height) / frameH)
+        )
+    }
+
+    private func iouNorm(_ a: NormalizedRect, _ b: NormalizedRect) -> Double {
+        let ax2 = a.origin.x + a.size.width
+        let ay2 = a.origin.y + a.size.height
+        let bx2 = b.origin.x + b.size.width
+        let by2 = b.origin.y + b.size.height
+        let ix = max(0, min(ax2, bx2) - max(a.origin.x, b.origin.x))
+        let iy = max(0, min(ay2, by2) - max(a.origin.y, b.origin.y))
+        let inter = ix * iy
+        let areaA = a.size.width * a.size.height
+        let areaB = b.size.width * b.size.height
+        let uni = max(areaA + areaB - inter, 1e-9)
+        return inter / uni
+    }
+
+    private func mergeDetections(_ base: [Detection], with add: [Detection]) -> [Detection] {
+        guard !add.isEmpty else { return base }
+        var out = base
+        for d in add {
+            if out.allSatisfy({ iouNorm($0.boundingBox, d.boundingBox) < 0.4 }) {
+                out.append(d)
+            }
+        }
+        return out.sorted { $0.confidence > $1.confidence }
+    }
     #endif
 
     private static func locateSingleModel(in bundle: Bundle) -> URL? {
@@ -233,7 +349,8 @@ public struct VLMReferee: @unchecked Sendable {
     }
 
     private static func locateMobileCLIP(in bundle: Bundle) -> (text: URL, image: URL)? {
-        let variants = ["s0", "s1", "s2", "blt", "b"]
+        // Prefer stronger variants first
+        let variants = ["s2", "s1", "b", "blt", "s0"]
         for v in variants {
             let txtName = "mobileclip_\(v)_text"
             let imgName = "mobileclip_\(v)_image"
