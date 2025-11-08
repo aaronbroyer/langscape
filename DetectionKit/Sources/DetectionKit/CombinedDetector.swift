@@ -20,12 +20,13 @@ public actor CombinedDetector: DetectionService {
         // VLM-first: ULTRA-AGGRESSIVE settings for maximum detection of thousands of objects
         // VERY low acceptGate (0.30) for maximum recall - accept even marginal proposals
         // Very high maxProposals (3000) for dense coverage
-        self.vlm = VLMDetector(logger: logger, cropSize: 224, acceptGate: 0.30, maxProposals: 3000)
+        // cropSize: 256 to match MobileCLIP input requirements
+        self.vlm = VLMDetector(logger: logger, cropSize: 256, acceptGate: 0.30, maxProposals: 3000)
         // YOLO as fallback with moderate thresholds for debugging
         self.yolo = YOLOInterpreter(logger: logger, confidenceThreshold: 0.25, iouThreshold: 0.45)
         self.filter = DetectionFilter()
         // Initialize VLM referee with relaxed gates for verification
-        self.referee = try? VLMReferee(logger: logger, cropSize: 224, acceptGate: 0.60, minKeepGate: 0.40, maxProposals: 48)
+        self.referee = try? VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.60, minKeepGate: 0.40, maxProposals: 48)
         self.refereeReady = (referee != nil)
     }
 
