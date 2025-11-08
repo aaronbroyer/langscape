@@ -14,6 +14,10 @@ public struct CGSize: Equatable, Sendable {
 #endif
 import Utilities
 
+#if canImport(CoreVideo)
+import CoreVideo
+#endif
+
 #if canImport(Combine)
 import Combine
 #else
@@ -42,6 +46,7 @@ public final class DetectionVM: ObservableObject {
 
     private let logger: Logger
     private let processor: DetectionProcessor
+    private let refiner: ClassificationRefiner?
     private let errorStore: ErrorStore
     private var lastSubmissionDate: Date = .distantPast
     private var fpsWindowStart: Date?
@@ -59,6 +64,7 @@ public final class DetectionVM: ObservableObject {
         self.throttleInterval = throttleInterval
         self.logger = logger
         self.processor = DetectionProcessor(service: service)
+        self.refiner = try? ClassificationRefiner()
         self.fpsWindow = fpsWindow
         self.errorStore = errorStore
     }
@@ -85,14 +91,20 @@ public final class DetectionVM: ObservableObject {
         Task(priority: .userInitiated) { [weak self] in
             guard let viewModel = self else { return }
             do {
-                let detections = try await processor.process(request)
+                var detections = try await processor.process(request)
+                #if canImport(CoreVideo)
+                if let refiner = viewModel.refiner, let pb = request.pixelBuffer as? CVPixelBuffer {
+                    detections = refiner.refine(detections, pixelBuffer: pb, orientationRaw: request.imageOrientationRaw)
+                }
+                #endif
+                let countForLog = detections.count
+                let labelsForLog = detections.map { "\($0.label)(\(Int($0.confidence*100))%)" }.joined(separator: ", ")
                 await MainActor.run {
                     viewModel.detections = detections
                     viewModel.lastError = nil
                     viewModel.registerFrame(timestamp: request.timestamp)
                 }
-                let labels = detections.map { "\($0.label)(\(Int($0.confidence*100))%)" }.joined(separator: ", ")
-                await logger.log("Processed frame \(request.id) with \(detections.count) detections: [\(labels)]", level: .debug, category: "DetectionKit.DetectionVM")
+                await logger.log("Processed frame \(request.id) with \(countForLog) detections: [\(labelsForLog)]", level: .debug, category: "DetectionKit.DetectionVM")
             } catch let error as DetectionError {
                 await MainActor.run {
                     viewModel.lastError = error
