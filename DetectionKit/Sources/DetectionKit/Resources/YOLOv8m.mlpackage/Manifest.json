@@ -1,18 +1,3 @@
-{
-    "fileFormatVersion": "1.0.0",
-    "itemInfoEntries": {
-        "0446E57D-2416-4E3E-86B3-8B20912BA384": {
-            "author": "com.apple.CoreML",
-            "description": "CoreML Model Weights",
-            "name": "weights",
-            "path": "com.apple.CoreML/weights"
-        },
-        "C3C1C8D4-8167-49D7-80AF-D6144EBFCA08": {
-            "author": "com.apple.CoreML",
-            "description": "CoreML Model Specification",
-            "name": "model.mlmodel",
-            "path": "com.apple.CoreML/model.mlmodel"
-        }
-    },
-    "rootModelIdentifier": "C3C1C8D4-8167-49D7-80AF-D6144EBFCA08"
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:ac8233a79b03fe6d4bb4d3af1b654be5b137b009d49289b651efad40f24503eb
+size 617
