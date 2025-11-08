@@ -286,7 +286,9 @@ private actor DetectionProcessor {
             prepareTask = nil  // Clear task after completion
         }
         let raw = try await service.detect(on: request)
+        print("DetectionProcessor: Got \(raw.count) raw detections from service")
         let stabilized = stabilize(detections: raw, timestamp: request.timestamp)
+        print("DetectionProcessor: After stabilize: \(stabilized.count) detections")
         return stabilized
     }
 
@@ -302,6 +304,8 @@ private actor DetectionProcessor {
     }
 
     private func stabilize(detections: [Detection], timestamp: Date) -> [Detection] {
+        print("DetectionProcessor.stabilize: Input \(detections.count) detections, \(tracks.count) existing tracks")
+
         // Step 1: Rebuild spatial index with current tracks
         spatialIndex.clear()
         for (id, track) in tracks {
@@ -374,9 +378,16 @@ private actor DetectionProcessor {
         // Step 5: Emit stable tracks with confidence-based promotion (Phase 3)
         let stable = tracks.values.filter { tr in
             let requiredHits = getRequiredHits(confidence: tr.confidence)
-            return tr.hits >= requiredHits && timestamp.timeIntervalSince(tr.lastTimestamp) <= maxTrackAge
+            let meetsHits = tr.hits >= requiredHits
+            let meetsAge = timestamp.timeIntervalSince(tr.lastTimestamp) <= maxTrackAge
+            if !meetsHits || !meetsAge {
+                print("DetectionProcessor.stabilize: Filtering track \(tr.label) - hits:\(tr.hits) >= \(requiredHits) = \(meetsHits), age:\(timestamp.timeIntervalSince(tr.lastTimestamp)) <= \(maxTrackAge) = \(meetsAge)")
+            }
+            return meetsHits && meetsAge
         }
         .sorted(by: { $0.confidence > $1.confidence })
+
+        print("DetectionProcessor.stabilize: Emitting \(stable.count) stable tracks out of \(tracks.count) total tracks")
 
         return stable.map { tr in
             Detection(id: tr.id, label: tr.label, confidence: tr.confidence, boundingBox: tr.bbox)
