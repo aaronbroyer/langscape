@@ -38,7 +38,7 @@ public struct VLMReferee: @unchecked Sendable {
     private let minKeepGate: Double
     private let maxProposals: Int
 
-    public init(bundle: Bundle? = nil, logger: Utilities.Logger = .shared, cropSize: Int = 224, acceptGate: Double = 0.85, minKeepGate: Double = 0.70, maxProposals: Int = 48) throws {
+    public init(bundle: Bundle? = nil, logger: Utilities.Logger = .shared, cropSize: Int = 256, acceptGate: Double = 0.85, minKeepGate: Double = 0.70, maxProposals: Int = 48) throws {
         let resourceBundle = bundle ?? Bundle.module
         self.logger = logger
         self.cropSize = cropSize

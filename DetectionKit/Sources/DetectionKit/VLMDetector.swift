@@ -35,7 +35,7 @@ public actor VLMDetector: DetectionService {
     private let ciContext = CIContext()
     #endif
 
-    public init(logger: Utilities.Logger = .shared, cropSize: Int = 224, acceptGate: Double = 0.85, maxProposals: Int = 64) {
+    public init(logger: Utilities.Logger = .shared, cropSize: Int = 256, acceptGate: Double = 0.85, maxProposals: Int = 64) {
         self.logger = logger
         self.cropSize = cropSize
         self.acceptGate = acceptGate
@@ -253,7 +253,13 @@ public actor VLMDetector: DetectionService {
             let out = try model.prediction(from: prov)
             guard let arr = out.featureValue(for: oKey)?.multiArrayValue else { return nil }
             return l2norm(toDoubles(arr))
-        } catch { return nil }
+        } catch {
+            // Log error for debugging (this is a static method, so we can't access logger actor)
+            let w = CVPixelBufferGetWidth(pixel)
+            let h = CVPixelBufferGetHeight(pixel)
+            print("VLMDetector.embedImage failed: \(error.localizedDescription), pixel size: \(w)x\(h)")
+            return nil
+        }
     }
 
     private static func toDoubles(_ m: MLMultiArray) -> [Double] {
