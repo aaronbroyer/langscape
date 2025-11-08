@@ -51,7 +51,7 @@ public actor YOLOInterpreter: DetectionService {
 
     private let logger: Logger
     private var backend: Backend = .mock
-    private let maxDetections: Int = 50
+    private let maxDetections: Int = 30
     private var isPrepared = false
 
     // NMS thresholds passed to the model (not client-side filtering)
@@ -60,8 +60,8 @@ public actor YOLOInterpreter: DetectionService {
 
     public init(
         logger: Logger = .shared,
-        confidenceThreshold: Double = 0.5,
-        iouThreshold: Double = 0.45
+        confidenceThreshold: Double = 0.6,
+        iouThreshold: Double = 0.5
     ) {
         self.logger = logger
         self.modelConfidenceThreshold = confidenceThreshold

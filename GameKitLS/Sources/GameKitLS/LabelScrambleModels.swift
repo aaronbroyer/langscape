@@ -110,9 +110,9 @@ public struct RoundGenerator: RoundGenerating {
 
     public init(
         minimumObjectCount: Int = 3,
-        maximumObjectCount: Int = 7,
+        maximumObjectCount: Int = 6,
         labelProvider: any LabelProviding = LabelEngine(),
-        minConfidence: Double = 0.35,
+        minConfidence: Double = 0.50,
         logger: Logger = .shared
     ) {
         self.minimumObjectCount = minimumObjectCount
@@ -165,7 +165,7 @@ public struct RoundGenerator: RoundGenerating {
             let h = detection.boundingBox.size.height
             let area = w * h
             let aspect = max(w, h) / max(0.0001, min(w, h))
-            guard area >= 0.006 && aspect <= 6.0 else { continue }
+            guard area >= 0.010 && aspect <= 4.0 else { continue }
             seen.insert(key)
             results.append(detection)
         }
