@@ -156,12 +156,34 @@ public actor VLMDetector: DetectionService {
 
     #if canImport(CoreML)
     private func locateMobileCLIP(in bundle: Bundle) -> (text: URL, image: URL)? {
+        // Try both .mlmodelc (compiled) and .mlpackage (source) for each variant
         for v in ["s2", "s1", "b", "blt", "s0"] {
             let txtName = "mobileclip_\(v)_text"
             let imgName = "mobileclip_\(v)_image"
+
+            // Try compiled models first (.mlmodelc)
+            if let txt = bundle.url(forResource: txtName, withExtension: "mlmodelc"),
+               let img = bundle.url(forResource: imgName, withExtension: "mlmodelc") {
+                Task { await logger.log("VLMDetector: Found compiled MobileCLIP \(v) models", level: .info, category: "DetectionKit.VLMDetector") }
+                return (txt, img)
+            }
+
+            // Try source packages (.mlpackage)
             if let txt = bundle.url(forResource: txtName, withExtension: "mlpackage"),
-               let img = bundle.url(forResource: imgName, withExtension: "mlpackage") { return (txt, img) }
+               let img = bundle.url(forResource: imgName, withExtension: "mlpackage") {
+                Task { await logger.log("VLMDetector: Found MobileCLIP \(v) mlpackage models", level: .info, category: "DetectionKit.VLMDetector") }
+                return (txt, img)
+            }
         }
+
+        // Debug: Log all available resources
+        Task {
+            await logger.log("VLMDetector: MobileCLIP models not found. Searching bundle resources...", level: .error, category: "DetectionKit.VLMDetector")
+            if let resourcePath = bundle.resourcePath {
+                await logger.log("VLMDetector: Bundle resource path: \(resourcePath)", level: .error, category: "DetectionKit.VLMDetector")
+            }
+        }
+
         return nil
     }
 
