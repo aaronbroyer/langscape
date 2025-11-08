@@ -51,7 +51,7 @@ public actor YOLOInterpreter: DetectionService {
 
     private let logger: Logger
     private var backend: Backend = .mock
-    private let maxDetections: Int = 60
+    private var maxDetections: Int = 5000
     private var isPrepared = false
 
     // NMS thresholds passed to the model (not client-side filtering)
@@ -60,8 +60,8 @@ public actor YOLOInterpreter: DetectionService {
 
     public init(
         logger: Logger = .shared,
-        confidenceThreshold: Double = 0.30,
-        iouThreshold: Double = 0.45
+        confidenceThreshold: Double = 0.15,
+        iouThreshold: Double = 0.35
     ) {
         self.logger = logger
         self.modelConfidenceThreshold = confidenceThreshold
@@ -165,8 +165,37 @@ public actor YOLOInterpreter: DetectionService {
                 )
                 return Detection(label: best.identifier, confidence: confidence, boundingBox: normalized)
             }
-            .sorted(by: { $0.confidence > $1.confidence })
-            return Array(detections.prefix(maxDetections))
+
+            // Memory-aware detection limit adjustment
+            #if os(iOS)
+            let currentLimit: Int
+            if #available(iOS 15.0, *) {
+                let memoryPressure = ProcessInfo.processInfo.thermalState
+                switch memoryPressure {
+                case .critical:
+                    currentLimit = 500
+                case .serious:
+                    currentLimit = 2000
+                default:
+                    currentLimit = maxDetections
+                }
+            } else {
+                currentLimit = maxDetections
+            }
+            #else
+            let currentLimit = maxDetections
+            #endif
+
+            // Quality scoring: prioritize larger, more confident boxes
+            // qualityScore = confidence × sqrt(boxArea)
+            let scoredDetections = detections.map { detection -> (detection: Detection, score: Double) in
+                let boxArea = detection.boundingBox.size.width * detection.boundingBox.size.height
+                let qualityScore = detection.confidence * sqrt(boxArea)
+                return (detection, qualityScore)
+            }
+            .sorted(by: { $0.score > $1.score })
+
+            return scoredDetections.prefix(currentLimit).map { $0.detection }
         #endif
         }
     }

@@ -5,13 +5,16 @@ public actor CombinedDetector: DetectionService {
     private let logger: Utilities.Logger
     private let vlm: VLMDetector
     private let yolo: YOLOInterpreter
+    private let filter: DetectionFilter
     private var vlmReady = false
     private var yoloReady = false
 
     public init(logger: Utilities.Logger = .shared) {
         self.logger = logger
         self.vlm = VLMDetector(logger: logger)
-        self.yolo = YOLOInterpreter(logger: logger, confidenceThreshold: 0.30, iouThreshold: 0.45)
+        // Use new high-recall thresholds (0.15 confidence, 0.35 IoU)
+        self.yolo = YOLOInterpreter(logger: logger, confidenceThreshold: 0.15, iouThreshold: 0.35)
+        self.filter = DetectionFilter()
     }
 
     public func prepare() async throws {
@@ -39,30 +42,68 @@ public actor CombinedDetector: DetectionService {
 
     public func detect(on request: DetectionRequest) async throws -> [Detection] {
         var results: [Detection] = []
-        results.reserveCapacity(16)
+        results.reserveCapacity(5000)
 
-        if vlmReady {
+        // Phase 1: Run YOLO with high recall (0.15 threshold)
+        var yoloDetections: [Detection] = []
+        if yoloReady {
             do {
-                let dets = try await vlm.detect(on: request)
-                results.append(contentsOf: dets)
-            } catch {
-                await logger.log("CombinedDetector: VLM detect failed (\(error)).", level: .error, category: "DetectionKit.CombinedDetector")
-            }
-        }
-
-        // If VLM found few results, augment with YOLO proposals (DetectionVM will run referee/refiner later)
-        if yoloReady && results.count < 4 {
-            do {
-                let yoloDets = try await yolo.detect(on: request)
-                results.append(contentsOf: yoloDets)
+                yoloDetections = try await yolo.detect(on: request)
+                let count = yoloDetections.count
+                await logger.log("CombinedDetector: YOLO returned \(count) detections", level: .debug, category: "DetectionKit.CombinedDetector")
             } catch {
                 await logger.log("CombinedDetector: YOLO detect failed (\(error)).", level: .error, category: "DetectionKit.CombinedDetector")
+                // Fall back to VLM-only if YOLO fails
+                if vlmReady {
+                    do {
+                        let vlmDets = try await vlm.detect(on: request)
+                        return vlmDets.sorted { $0.confidence > $1.confidence }
+                    } catch {
+                        await logger.log("CombinedDetector: VLM detect also failed (\(error)).", level: .error, category: "DetectionKit.CombinedDetector")
+                        return []
+                    }
+                }
+                return []
             }
+        } else if vlmReady {
+            // YOLO not ready, fall back to VLM-only
+            do {
+                let vlmDets = try await vlm.detect(on: request)
+                return vlmDets.sorted { $0.confidence > $1.confidence }
+            } catch {
+                await logger.log("CombinedDetector: VLM detect failed (\(error)).", level: .error, category: "DetectionKit.CombinedDetector")
+                return []
+            }
+        } else {
+            throw DetectionError.modelNotFound
         }
 
-        // De-dup (IoU NMS-like merge) and sort
+        // Phase 2: Apply detection filter to triage
+        let filtered = filter.filter(yoloDetections)
+        await logger.log("CombinedDetector: Filtered into \(filtered.autoAccept.count) high-conf, \(filtered.needsVerification.count) mid-conf, \(filtered.requiresStrictGate.count) low-conf", level: .debug, category: "DetectionKit.CombinedDetector")
+
+        // Phase 3: Auto-accept high-confidence detections (>0.60)
+        results.append(contentsOf: filtered.autoAccept)
+
+        // Phase 4: VLM verification for mid/low confidence (if VLM available)
+        // Note: Full VLM verification will be implemented in Phase 2 of the migration
+        // For now, we accept mid-confidence detections and drop low-confidence ones
+        if vlmReady {
+            // TODO: Implement batch VLM verification in Phase 2
+            // For now, accept mid-confidence detections as-is
+            results.append(contentsOf: filtered.needsVerification)
+            // Drop low-confidence detections for now (will verify in Phase 2)
+        } else {
+            // No VLM available, accept mid-confidence, drop low
+            results.append(contentsOf: filtered.needsVerification)
+        }
+
+        // Phase 5: Final NMS and sort
         results = nms(results, iou: 0.4)
         results.sort { $0.confidence > $1.confidence }
+
+        let finalCount = results.count
+        await logger.log("CombinedDetector: Returning \(finalCount) final detections", level: .info, category: "DetectionKit.CombinedDetector")
         return results
     }
 
