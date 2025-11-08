@@ -137,6 +137,7 @@ public struct VLMReferee: @unchecked Sendable {
     }
 
     #if canImport(CoreVideo)
+    /// Filter detections with VLM verification (legacy, single-threaded)
     public func filter(_ detections: [Detection], pixelBuffer: CVPixelBuffer, orientationRaw: UInt32?, minConf: Double = 0.30, maxConf: Double = 0.70) -> [Detection] {
         guard !detections.isEmpty else { return detections }
         let W = Double(CVPixelBufferGetWidth(pixelBuffer))
@@ -154,27 +155,86 @@ public struct VLMReferee: @unchecked Sendable {
             if det.confidence > maxConf { kept.append(det); continue }
             let rect = CGRect(x: det.boundingBox.origin.x * W, y: det.boundingBox.origin.y * H, width: det.boundingBox.size.width * W, height: det.boundingBox.size.height * H)
             guard rect.width >= 10, rect.height >= 10 else { kept.append(det); continue }
+
+            // Determine acceptance gate based on input confidence
+            // Mid-confidence (0.30-0.60): relaxed gate at 0.80
+            // Low-confidence (0.15-0.30): strict gate at 0.85
+            let confidenceGate = det.confidence >= 0.30 ? 0.80 : acceptGate
+
             let (bestLabel, score) = refine(label: det.label, base: baseImage, rect: rect)
-            let newLabel = (score >= acceptGate) ? bestLabel : det.label
-            let newConf = (score >= acceptGate) ? max(det.confidence, score) : det.confidence
+            let newLabel = (score >= confidenceGate) ? bestLabel : det.label
+            let newConf = (score >= confidenceGate) ? max(det.confidence, score) : det.confidence
             if score < minKeepGate {
                 // Drop boxes that the VLM strongly disagrees with to improve precision
                 Task { await logger.log("VLM dropped \(det.label) (~\(Int(score*100))%)", level: .debug, category: "DetectionKit.VLMReferee") }
                 continue
-            } else if score < acceptGate {
+            } else if score < confidenceGate {
                 Task { await logger.log("VLM low agreement for \(det.label) (~\(Int(score*100))%)", level: .debug, category: "DetectionKit.VLMReferee") }
             }
             kept.append(Detection(id: det.id, label: newLabel, confidence: newConf, boundingBox: det.boundingBox))
         }
-        // If recall is still low, augment with CLIP proposals from a coarse grid
-        if kept.count < 4,
-           isMobileCLIP,
-           let clipImageModel,
-           let bank = labelBank,
-           let tEmb = textEmbeddings {
-            let proposals = proposeFromGrid(base: baseImage, frameW: W, frameH: H, existing: kept.map { $0.boundingBox }, bank: bank, textEmb: tEmb, imageModel: clipImageModel)
-            return mergeDetections(kept, with: proposals)
+        // Grid proposal generation removed for Phase 2 - trust YOLO's high recall
+        return kept
+    }
+
+    /// Batch filter detections with VLM verification for improved efficiency
+    /// Processes detections in batches to reduce overhead
+    public func filterBatch(_ detections: [Detection], pixelBuffer: CVPixelBuffer, orientationRaw: UInt32?, minConf: Double = 0.30, maxConf: Double = 0.70, maxVerify: Int = 1000, earlyStopThreshold: Int = 3000) -> [Detection] {
+        guard !detections.isEmpty else { return detections }
+        let W = Double(CVPixelBufferGetWidth(pixelBuffer))
+        let H = Double(CVPixelBufferGetHeight(pixelBuffer))
+        #if canImport(ImageIO)
+        let orientation = orientationRaw.flatMap { CGImagePropertyOrientation(rawValue: $0) } ?? .up
+        #else
+        let orientation: CGImagePropertyOrientation = .up
+        #endif
+        let baseImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(orientation)
+
+        var kept: [Detection] = []
+        kept.reserveCapacity(detections.count)
+        var verifiedCount = 0
+
+        for det in detections {
+            // Auto-accept high confidence
+            if det.confidence > maxConf {
+                kept.append(det)
+                continue
+            }
+
+            let rect = CGRect(x: det.boundingBox.origin.x * W, y: det.boundingBox.origin.y * H, width: det.boundingBox.size.width * W, height: det.boundingBox.size.height * H)
+            guard rect.width >= 10, rect.height >= 10 else {
+                kept.append(det)
+                continue
+            }
+
+            // Early stopping: if we've verified enough and have enough accepted detections, accept remaining high/mid confidence without verification
+            if verifiedCount >= maxVerify && kept.count >= earlyStopThreshold && det.confidence >= 0.30 {
+                kept.append(det)
+                continue
+            }
+
+            // Determine acceptance gate based on input confidence
+            // Mid-confidence (0.30-0.60): relaxed gate at 0.80
+            // Low-confidence (0.15-0.30): strict gate at 0.85
+            let confidenceGate = det.confidence >= 0.30 ? 0.80 : acceptGate
+
+            let (bestLabel, score) = refine(label: det.label, base: baseImage, rect: rect)
+            verifiedCount += 1
+
+            let newLabel = (score >= confidenceGate) ? bestLabel : det.label
+            let newConf = (score >= confidenceGate) ? max(det.confidence, score) : det.confidence
+            if score < minKeepGate {
+                // Drop boxes that the VLM strongly disagrees with to improve precision
+                Task { await logger.log("VLM dropped \(det.label) (~\(Int(score*100))%)", level: .debug, category: "DetectionKit.VLMReferee") }
+                continue
+            } else if score < confidenceGate {
+                Task { await logger.log("VLM low agreement for \(det.label) (~\(Int(score*100))%)", level: .debug, category: "DetectionKit.VLMReferee") }
+            }
+            kept.append(Detection(id: det.id, label: newLabel, confidence: newConf, boundingBox: det.boundingBox))
         }
+
+        let msg = "VLM verified \(verifiedCount) detections, kept \(kept.count)"
+        Task { await logger.log(msg, level: .info, category: "DetectionKit.VLMReferee") }
         return kept
     }
 
