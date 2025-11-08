@@ -46,12 +46,14 @@ struct CameraPreviewView: View {
             .onDisappear {
                 controller.stopSession()
             }
-            .onChange(of: viewModel.detections) { newDetections in
+            .onChange(of: viewModel.detections) { _, newDetections in
                 gameViewModel.ingestDetections(newDetections)
             }
-            .onChange(of: gameViewModel.phase, perform: handlePhaseChange)
-            .onChange(of: viewModel.lastError) { error in
-                if error != nil {
+            .onChange(of: gameViewModel.phase) { _, newPhase in
+                handlePhaseChange(newPhase)
+            }
+            .onChange(of: viewModel.lastError) { _, newError in
+                if newError != nil {
                     gameViewModel.presentFatalError()
                 }
             }
