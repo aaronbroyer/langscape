@@ -405,7 +405,6 @@ private struct CameraPreviewLayer: UIViewRepresentable {
     }
 }
 
-@MainActor
 private final class CameraSessionController: NSObject, ObservableObject {
     let session = AVCaptureSession()
 
@@ -503,13 +502,25 @@ extension CameraSessionController: AVCaptureVideoDataOutputSampleBufferDelegate 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         #if canImport(ImageIO)
         let cgOrientationRaw: UInt32 = {
-            // Map AVCaptureVideoOrientation (back camera) to CGImagePropertyOrientation
-            switch connection.videoOrientation {
-            case .portrait: return CGImagePropertyOrientation.right.rawValue
-            case .portraitUpsideDown: return CGImagePropertyOrientation.left.rawValue
-            case .landscapeRight: return CGImagePropertyOrientation.up.rawValue
-            case .landscapeLeft: return CGImagePropertyOrientation.down.rawValue
-            @unknown default: return CGImagePropertyOrientation.up.rawValue
+            if #available(iOS 17.0, *) {
+                // Map rotation angle to CGImagePropertyOrientation
+                let angle = Int(connection.videoRotationAngle) % 360
+                switch angle {
+                case 0: return CGImagePropertyOrientation.up.rawValue
+                case 90: return CGImagePropertyOrientation.right.rawValue
+                case 180: return CGImagePropertyOrientation.down.rawValue
+                case 270: return CGImagePropertyOrientation.left.rawValue
+                default: return CGImagePropertyOrientation.up.rawValue
+                }
+            } else {
+                // Map AVCaptureVideoOrientation (back camera) to CGImagePropertyOrientation
+                switch connection.videoOrientation {
+                case .portrait: return CGImagePropertyOrientation.right.rawValue
+                case .portraitUpsideDown: return CGImagePropertyOrientation.left.rawValue
+                case .landscapeRight: return CGImagePropertyOrientation.up.rawValue
+                case .landscapeLeft: return CGImagePropertyOrientation.down.rawValue
+                @unknown default: return CGImagePropertyOrientation.up.rawValue
+                }
             }
         }()
         #else
@@ -704,7 +715,7 @@ private struct DraggableToken: View {
                             }
                         }
                 )
-                .onChange(of: state) { newState in
+                .onChange(of: state) { _, newState in
                     if newState == .placed {
                         dragOffset = .zero
                         isDragging = false
