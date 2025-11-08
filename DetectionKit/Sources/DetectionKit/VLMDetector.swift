@@ -100,14 +100,16 @@ public actor VLMDetector: DetectionService {
         let orientation: CGImagePropertyOrientation = .up
         #endif
         let baseImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(orientation)
-        // Multi-scale grid proposals (expanded for diverse object sizes)
+        // Multi-scale grid proposals - AGGRESSIVE for maximum coverage
         var rects: [CGRect] = []
-        let scales: [Double] = [0.10, 0.15, 0.20, 0.25, 0.33, 0.40, 0.50]  // Small to large objects
+        // Many scales from tiny to large objects
+        let scales: [Double] = [0.08, 0.10, 0.12, 0.15, 0.18, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70]
         for s in scales {
             let bw = W * s
             let bh = H * s
-            let strideX = bw * 0.5
-            let strideY = bh * 0.5
+            // Denser stride for more overlap - 0.33 instead of 0.5
+            let strideX = bw * 0.33
+            let strideY = bh * 0.33
             var y: Double = 0
             while y + bh <= H {
                 var x: Double = 0
@@ -118,21 +120,34 @@ public actor VLMDetector: DetectionService {
                 y += strideY
             }
         }
-        if rects.count > maxProposals { rects = Array(rects.prefix(maxProposals)) }
+        let totalProposals = rects.count
+        await logger.log("VLMDetector: Generated \(totalProposals) grid proposals before limit", level: .info, category: "DetectionKit.VLMDetector")
+        if rects.count > maxProposals {
+            rects = Array(rects.prefix(maxProposals))
+            await logger.log("VLMDetector: Limited to \(maxProposals) proposals", level: .info, category: "DetectionKit.VLMDetector")
+        }
         var out: [Detection] = []
         out.reserveCapacity(rects.count)
+        var scored = 0
+        var accepted = 0
         for r in rects {
-            guard r.width >= 12, r.height >= 12 else { continue }
+            guard r.width >= 8, r.height >= 8 else { continue }  // Allow smaller boxes
             let (label, sim) = scoreLabelBank(base: baseImage, rect: r, imageModel: imageModel)
+            scored += 1
             if sim >= acceptGate {
+                accepted += 1
                 let nr = toNormalized(r, frameW: W, frameH: H)
                 let det = Detection(label: label, confidence: sim, boundingBox: nr)
-                // NMS vs what we've already added
-                if out.allSatisfy({ iouNorm($0.boundingBox, det.boundingBox) < 0.4 }) {
+                // Very loose NMS - allow heavy overlap (0.7 instead of 0.4)
+                if out.allSatisfy({ iouNorm($0.boundingBox, det.boundingBox) < 0.7 }) {
                     out.append(det)
                 }
             }
         }
+        let finalCount = out.count
+        let scoredCount = scored
+        let acceptedCount = accepted
+        await logger.log("VLMDetector: Scored \(scoredCount) proposals, accepted \(acceptedCount) above gate \(acceptGate), kept \(finalCount) after NMS", level: .info, category: "DetectionKit.VLMDetector")
         return out.sorted { $0.confidence > $1.confidence }
         #else
         return []
