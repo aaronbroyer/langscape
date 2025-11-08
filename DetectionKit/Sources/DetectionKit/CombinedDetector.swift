@@ -17,11 +17,11 @@ public actor CombinedDetector: DetectionService {
 
     public init(logger: Utilities.Logger = .shared) {
         self.logger = logger
-        // VLM-first: ULTRA-AGGRESSIVE settings for maximum detection of thousands of objects
-        // VERY low acceptGate (0.30) for maximum recall - accept even marginal proposals
-        // Very high maxProposals (3000) for dense coverage
+        // VLM-first: BALANCED settings for quality detections
+        // acceptGate 0.50 for reasonable confidence threshold
+        // High maxProposals (3000) for good coverage
         // cropSize: 256 to match MobileCLIP input requirements
-        self.vlm = VLMDetector(logger: logger, cropSize: 256, acceptGate: 0.30, maxProposals: 3000)
+        self.vlm = VLMDetector(logger: logger, cropSize: 256, acceptGate: 0.50, maxProposals: 3000)
         // YOLO as fallback with moderate thresholds for debugging
         self.yolo = YOLOInterpreter(logger: logger, confidenceThreshold: 0.25, iouThreshold: 0.45)
         self.filter = DetectionFilter()
