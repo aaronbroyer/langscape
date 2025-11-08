@@ -184,15 +184,86 @@ public final class DetectionVM: ObservableObject {
     }
 }
 
+// MARK: - Spatial Index for efficient track association
+
+/// Spatial index using grid-based hashing for O(1) average-case lookup
+/// Partitions the normalized [0,1]×[0,1] frame into a grid
+private struct SpatialIndex {
+    private var grid: [[UUID]]
+    private let gridSize: Int
+
+    init(gridSize: Int = 10) {
+        self.gridSize = gridSize
+        self.grid = Array(repeating: [], count: gridSize * gridSize)
+    }
+
+    /// Clear all entries
+    mutating func clear() {
+        grid = Array(repeating: [], count: gridSize * gridSize)
+    }
+
+    /// Insert a track into the spatial index
+    mutating func insert(id: UUID, bbox: NormalizedRect) {
+        let cells = getCells(for: bbox)
+        for cell in cells {
+            grid[cell].append(id)
+        }
+    }
+
+    /// Query for track IDs that could potentially overlap with the given bbox
+    func query(bbox: NormalizedRect) -> Set<UUID> {
+        let cells = getCells(for: bbox)
+        var results = Set<UUID>()
+        for cell in cells {
+            results.formUnion(grid[cell])
+        }
+        return results
+    }
+
+    /// Get grid cells that overlap with the given bounding box
+    private func getCells(for bbox: NormalizedRect) -> [Int] {
+        // Calculate grid cell range for this bbox
+        let minX = Int(floor(bbox.origin.x * Double(gridSize)))
+        let maxX = Int(floor((bbox.origin.x + bbox.size.width) * Double(gridSize)))
+        let minY = Int(floor(bbox.origin.y * Double(gridSize)))
+        let maxY = Int(floor((bbox.origin.y + bbox.size.height) * Double(gridSize)))
+
+        // Clamp to grid bounds
+        let x0 = max(0, min(gridSize - 1, minX))
+        let x1 = max(0, min(gridSize - 1, maxX))
+        let y0 = max(0, min(gridSize - 1, minY))
+        let y1 = max(0, min(gridSize - 1, maxY))
+
+        var cells: [Int] = []
+        for y in y0...y1 {
+            for x in x0...x1 {
+                cells.append(y * gridSize + x)
+            }
+        }
+        return cells
+    }
+}
+
 private actor DetectionProcessor {
     private let service: any DetectionService
     private var prepared = false
     // Temporal smoothing state
     private var tracks: [UUID: Track] = [:]
-    private let iouThreshold: Double = 0.40
-    private let requiredHits: Int = 3
-    private let maxTrackAge: TimeInterval = 0.6
-    private let smoothingAlpha: Double = 0.5 // EMA for bbox/confidence
+    private var spatialIndex: SpatialIndex = SpatialIndex(gridSize: 10)
+
+    // Tracking parameters (Phase 3: adjusted for high-scale detection)
+    private let iouThreshold: Double = 0.35  // Lower for crowded scenes
+    private let maxTrackAge: TimeInterval = 0.4  // Faster pruning
+    private let smoothingAlpha: Double = 0.3  // More responsive to movement
+    private let maxActiveTracks: Int = 5000  // Hard cap
+
+    // Confidence-based hit requirements (Phase 3)
+    private let highConfidenceHits: Int = 1  // >0.70: emit immediately
+    private let midConfidenceHits: Int = 2   // 0.40-0.70: 2 hits
+    private let lowConfidenceHits: Int = 3   // 0.15-0.40: 3 hits
+
+    // Label voting window (Phase 3)
+    private let labelVotingWindow: Int = 5
 
     init(service: any DetectionService) {
         self.service = service
@@ -212,7 +283,7 @@ private actor DetectionProcessor {
     private struct Track {
         let id: UUID
         var label: String
-        var labelCounts: [String: Int]
+        var labelHistory: [(label: String, confidence: Double)]  // For weighted voting
         var bbox: NormalizedRect
         var confidence: Double
         var hits: Int
@@ -220,32 +291,46 @@ private actor DetectionProcessor {
     }
 
     private func stabilize(detections: [Detection], timestamp: Date) -> [Detection] {
-        // Step 1: Associate detections to existing tracks by IoU (label-agnostic)
+        // Step 1: Rebuild spatial index with current tracks
+        spatialIndex.clear()
+        for (id, track) in tracks {
+            spatialIndex.insert(id: id, bbox: track.bbox)
+        }
+
+        // Step 2: Associate detections to existing tracks using spatial indexing (O(n log n))
         var unmatchedTrackIDs = Set(tracks.keys)
 
         for det in detections {
-            // Find best matching track by IoU regardless of label
+            // Query spatial index for nearby tracks (much faster than checking all tracks)
+            let nearbyIDs = spatialIndex.query(bbox: det.boundingBox)
+
+            // Find best matching track among nearby candidates
             var bestID: UUID?
             var bestIoU: Double = 0
-            for (id, tr) in tracks {
+            for id in nearbyIDs {
+                guard let tr = tracks[id] else { continue }
                 let iouVal = iou(tr.bbox, det.boundingBox)
                 if iouVal > bestIoU { bestIoU = iouVal; bestID = id }
             }
 
             if let id = bestID, bestIoU >= iouThreshold, var tr = tracks[id] {
-                // EMA update
+                // EMA update for bbox and confidence
                 tr.bbox = emaBBox(old: tr.bbox, new: det.boundingBox, alpha: smoothingAlpha)
                 tr.confidence = tr.confidence * (1 - smoothingAlpha) + det.confidence * smoothingAlpha
                 tr.hits += 1
                 tr.lastTimestamp = timestamp
-                // Label majority voting
-                let key = det.label.lowercased()
-                var counts = tr.labelCounts
-                counts[key, default: 0] += 1
-                tr.labelCounts = counts
-                if let (bestLabel, _) = counts.max(by: { $0.value < $1.value }) {
-                    tr.label = bestLabel
+
+                // Enhanced label voting with history (Phase 3)
+                var history = tr.labelHistory
+                history.append((det.label.lowercased(), det.confidence))
+                // Keep only last N frames for voting
+                if history.count > labelVotingWindow {
+                    history.removeFirst()
                 }
+                tr.labelHistory = history
+
+                // Weighted voting: recent frames + higher confidence count more
+                tr.label = weightedMajorityVote(history: history)
                 tracks[id] = tr
                 unmatchedTrackIDs.remove(id)
             } else {
@@ -254,7 +339,7 @@ private actor DetectionProcessor {
                 tracks[id] = Track(
                     id: id,
                     label: det.label.lowercased(),
-                    labelCounts: [det.label.lowercased(): 1],
+                    labelHistory: [(det.label.lowercased(), det.confidence)],
                     bbox: det.boundingBox,
                     confidence: det.confidence,
                     hits: 1,
@@ -263,21 +348,68 @@ private actor DetectionProcessor {
             }
         }
 
-        // Step 2: Age/prune unmatched tracks
+        // Step 3: Age/prune unmatched tracks
         for id in unmatchedTrackIDs {
             if let tr = tracks[id], timestamp.timeIntervalSince(tr.lastTimestamp) > maxTrackAge {
                 tracks.removeValue(forKey: id)
             }
         }
 
-        // Step 3: Emit stable tracks only
+        // Step 4: Track capacity management (Phase 3)
+        if tracks.count > maxActiveTracks {
+            pruneLowestConfidenceTracks()
+        }
+
+        // Step 5: Emit stable tracks with confidence-based promotion (Phase 3)
         let stable = tracks.values.filter { tr in
-            tr.hits >= requiredHits && timestamp.timeIntervalSince(tr.lastTimestamp) <= maxTrackAge
+            let requiredHits = getRequiredHits(confidence: tr.confidence)
+            return tr.hits >= requiredHits && timestamp.timeIntervalSince(tr.lastTimestamp) <= maxTrackAge
         }
         .sorted(by: { $0.confidence > $1.confidence })
 
         return stable.map { tr in
             Detection(id: tr.id, label: tr.label, confidence: tr.confidence, boundingBox: tr.bbox)
+        }
+    }
+
+    // MARK: - Helper Methods (Phase 3)
+
+    /// Weighted majority vote for label stability
+    /// Recent frames count more (exponential decay), higher confidence counts more
+    private func weightedMajorityVote(history: [(label: String, confidence: Double)]) -> String {
+        guard !history.isEmpty else { return "" }
+
+        var scores: [String: Double] = [:]
+        for (i, entry) in history.enumerated() {
+            // Exponential decay: more recent = higher weight
+            let recencyWeight = pow(0.8, Double(history.count - 1 - i))
+            // Confidence weight
+            let confidenceWeight = entry.confidence
+            // Combined weight
+            let weight = recencyWeight * confidenceWeight
+            scores[entry.label, default: 0.0] += weight
+        }
+
+        return scores.max(by: { $0.value < $1.value })?.key ?? history.last!.label
+    }
+
+    /// Get required hits based on confidence (Phase 3: confidence-based promotion)
+    private func getRequiredHits(confidence: Double) -> Int {
+        if confidence > 0.70 {
+            return highConfidenceHits  // 1 hit
+        } else if confidence >= 0.40 {
+            return midConfidenceHits   // 2 hits
+        } else {
+            return lowConfidenceHits   // 3 hits
+        }
+    }
+
+    /// Prune lowest-confidence tracks to stay within capacity limit
+    private func pruneLowestConfidenceTracks() {
+        let sorted = tracks.values.sorted(by: { $0.confidence > $1.confidence })
+        let toPrune = sorted.dropFirst(maxActiveTracks)
+        for track in toPrune {
+            tracks.removeValue(forKey: track.id)
         }
     }
 
