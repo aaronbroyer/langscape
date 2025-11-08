@@ -89,6 +89,23 @@ public actor VLMDetector: DetectionService {
         let preparedCount = self.labelBank.count
         let failed = failedCount
         await logger.log("VLMDetector prepared: labels=\(preparedCount)/\(totalLabels) (failed: \(failed))", level: .info, category: "DetectionKit.VLMDetector")
+
+        // Diagnostic: Check embedding diversity by comparing first few embeddings
+        if textEmbeddings.count >= 10 {
+            let sampleLabels = Array(labelBank.prefix(10))
+            print("VLMDetector.prepare: Sample labels: \(sampleLabels.joined(separator: ", "))")
+            // Compare first two embeddings to verify they're different
+            if textEmbeddings.count >= 2 {
+                let emb0 = textEmbeddings[0]
+                let emb1 = textEmbeddings[1]
+                let similarity = VLMDetector.cosine01(emb0, emb1)
+                print("VLMDetector.prepare: Similarity between '\(labelBank[0])' and '\(labelBank[1])': \(Int(similarity*100))%")
+                // Also check if embeddings are normalized
+                let norm0 = sqrt(emb0.reduce(0.0) { $0 + $1*$1 })
+                let norm1 = sqrt(emb1.reduce(0.0) { $0 + $1*$1 })
+                print("VLMDetector.prepare: Embedding norms: '\(labelBank[0])'=\(norm0), '\(labelBank[1])'=\(norm1)")
+            }
+        }
         #else
         throw DetectionError.modelNotFound
         #endif
@@ -219,27 +236,56 @@ public actor VLMDetector: DetectionService {
         } catch { return nil }
     }
 
+    private var diagnosticCallCount = 0  // Add counter for diagnostic logging
+
     private func scoreLabelBank(base: CIImage, rect: CGRect, imageModel: MLModel) -> (String, Double) {
         let crop = base.cropped(to: rect)
         let scaleX = CGFloat(cropSize) / crop.extent.width
         let scaleY = CGFloat(cropSize) / crop.extent.height
         let scaled = crop.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
-        guard let cg = ciContext.createCGImage(scaled, from: CGRect(x: 0, y: 0, width: cropSize, height: cropSize)) else { return ("", 0.0) }
+        guard let cg = ciContext.createCGImage(scaled, from: CGRect(x: 0, y: 0, width: cropSize, height: cropSize)) else {
+            print("VLMDetector.scoreLabelBank: Failed to create CGImage")
+            return ("", 0.0)
+        }
         var pb: CVPixelBuffer?
         let attrs: [CFString: Any] = [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true]
         let status = CVPixelBufferCreate(kCFAllocatorDefault, cropSize, cropSize, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pb)
-        guard status == kCVReturnSuccess, let pixel = pb else { return ("", 0.0) }
+        guard status == kCVReturnSuccess, let pixel = pb else {
+            print("VLMDetector.scoreLabelBank: Failed to create CVPixelBuffer, status=\(status)")
+            return ("", 0.0)
+        }
         CVPixelBufferLockBaseAddress(pixel, .readOnly)
         let ctx = CGContext(data: CVPixelBufferGetBaseAddress(pixel), width: cropSize, height: cropSize, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixel), space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)
         ctx?.draw(cg, in: CGRect(x: 0, y: 0, width: cropSize, height: cropSize))
         CVPixelBufferUnlockBaseAddress(pixel, .readOnly)
-        guard let imgVec = VLMDetector.embedImage(pixel: pixel, model: imageModel) else { return ("", 0.0) }
-        var bestIdx = 0
-        var bestSim = -1.0
+        guard let imgVec = VLMDetector.embedImage(pixel: pixel, model: imageModel) else {
+            print("VLMDetector.scoreLabelBank: Failed to embed image")
+            return ("", 0.0)
+        }
+
+        // Compute all similarities
+        var scores: [(idx: Int, sim: Double)] = []
+        scores.reserveCapacity(textEmbeddings.count)
         for (i, tv) in textEmbeddings.enumerated() {
             let sim = VLMDetector.cosine01(imgVec, tv)
-            if sim > bestSim { bestSim = sim; bestIdx = i }
+            scores.append((i, sim))
         }
+        scores.sort { $0.sim > $1.sim }
+
+        // Diagnostic logging for first 3 proposals
+        diagnosticCallCount += 1
+        if diagnosticCallCount <= 3 {
+            let top5 = scores.prefix(5).map { (idx, sim) in
+                "\(labelBank[idx])(\(Int(sim*100))%)"
+            }.joined(separator: ", ")
+            print("VLMDetector.scoreLabelBank #\(diagnosticCallCount): Top-5 matches: \(top5)")
+            // Check embedding diversity
+            let imgNorm = imgVec.reduce(0.0) { $0 + $1*$1 }
+            print("VLMDetector.scoreLabelBank #\(diagnosticCallCount): Image embedding L2 norm: \(sqrt(imgNorm))")
+        }
+
+        let bestIdx = scores[0].idx
+        let bestSim = scores[0].sim
         return (labelBank[bestIdx], bestSim)
     }
 
