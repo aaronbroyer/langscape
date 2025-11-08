@@ -247,6 +247,7 @@ private struct SpatialIndex {
 private actor DetectionProcessor {
     private let service: any DetectionService
     private var prepared = false
+    private var prepareTask: Task<Void, Error>?
     // Temporal smoothing state
     private var tracks: [UUID: Track] = [:]
     private var spatialIndex: SpatialIndex = SpatialIndex(gridSize: 10)
@@ -270,9 +271,19 @@ private actor DetectionProcessor {
     }
 
     func process(_ request: DetectionRequest) async throws -> [Detection] {
-        if !prepared {
-            try await service.prepare()
+        // Ensure preparation happens exactly once, even with concurrent calls
+        if let task = prepareTask {
+            // Wait for existing prepare task to complete
+            try await task.value
+        } else if !prepared {
+            // Create and store the prepare task so concurrent calls can wait for it
+            let task = Task {
+                try await service.prepare()
+            }
+            prepareTask = task
+            try await task.value
             prepared = true
+            prepareTask = nil  // Clear task after completion
         }
         let raw = try await service.detect(on: request)
         let stabilized = stabilize(detections: raw, timestamp: request.timestamp)
