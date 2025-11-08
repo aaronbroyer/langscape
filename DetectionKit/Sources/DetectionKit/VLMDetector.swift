@@ -68,17 +68,27 @@ public actor VLMDetector: DetectionService {
             .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        let totalLabels = labels.count
+        await logger.log("VLMDetector: Found \(totalLabels) labels in bank, embedding...", level: .info, category: "DetectionKit.VLMDetector")
         var pairs: [(String, [Double])] = []
         pairs.reserveCapacity(labels.count)
+        var failedCount = 0
         if let tModel = textModel {
             for l in labels {
-                if let emb = Self.embedText(label: l, tokenizer: tokenizer, model: tModel) { pairs.append((l, emb)) }
+                if let emb = Self.embedText(label: l, tokenizer: tokenizer, model: tModel) {
+                    pairs.append((l, emb))
+                } else {
+                    failedCount += 1
+                }
             }
+        } else {
+            await logger.log("VLMDetector: textModel is nil, cannot embed labels", level: .error, category: "DetectionKit.VLMDetector")
         }
         self.labelBank = pairs.map { $0.0 }
         self.textEmbeddings = pairs.map { $0.1 }
         let preparedCount = self.labelBank.count
-        await logger.log("VLMDetector prepared: labels=\(preparedCount)", level: .info, category: "DetectionKit.VLMDetector")
+        let failed = failedCount
+        await logger.log("VLMDetector prepared: labels=\(preparedCount)/\(totalLabels) (failed: \(failed))", level: .info, category: "DetectionKit.VLMDetector")
         #else
         throw DetectionError.modelNotFound
         #endif
@@ -91,7 +101,12 @@ public actor VLMDetector: DetectionService {
         guard let pixelBuffer = request.pixelBuffer as? CVPixelBuffer else { throw DetectionError.invalidInput }
         #endif
         #if canImport(CoreML)
-        guard let imageModel, !labelBank.isEmpty else { return [] }
+        guard let imageModel, !labelBank.isEmpty else {
+            let hasImageModel = imageModel != nil
+            let bankSize = labelBank.count
+            await logger.log("VLMDetector: Cannot detect - imageModel: \(hasImageModel), labelBank size: \(bankSize)", level: .error, category: "DetectionKit.VLMDetector")
+            return []
+        }
         let W = Double(CVPixelBufferGetWidth(pixelBuffer))
         let H = Double(CVPixelBufferGetHeight(pixelBuffer))
         #if canImport(ImageIO)
