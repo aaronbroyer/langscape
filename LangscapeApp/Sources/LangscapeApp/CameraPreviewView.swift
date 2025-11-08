@@ -302,10 +302,13 @@ struct CameraPreviewView: View {
             }
         case .ready:
             startPulseAnimation()
+            print("CameraPreviewView: State .ready - showing detections")
             withAnimation(.easeInOut(duration: 0.2)) { showDetections = true }
         case .scanning:
+            print("CameraPreviewView: State .scanning - showing detections")
             withAnimation(.easeInOut(duration: 0.2)) { showDetections = true }
         case .playing, .paused:
+            print("CameraPreviewView: State .playing/.paused - HIDING detections")
             withAnimation(.easeInOut(duration: 0.2)) { showDetections = false }
         default:
             if startPulse {
@@ -343,7 +346,8 @@ struct CameraPreviewView: View {
     }
 
     private func detectionOverlay(for detections: [Detection], in size: CGSize) -> some View {
-        ZStack {
+        print("CameraPreviewView.detectionOverlay: Rendering \(detections.count) detections, showDetections=\(showDetections)")
+        return ZStack {
             ForEach(detections) { detection in
                 let rect = frame(for: detection, in: size)
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
