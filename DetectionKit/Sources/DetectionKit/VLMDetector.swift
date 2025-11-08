@@ -100,9 +100,9 @@ public actor VLMDetector: DetectionService {
         let orientation: CGImagePropertyOrientation = .up
         #endif
         let baseImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(orientation)
-        // Multi-scale grid proposals
+        // Multi-scale grid proposals (expanded for diverse object sizes)
         var rects: [CGRect] = []
-        let scales: [Double] = [0.20, 0.25, 0.33]
+        let scales: [Double] = [0.10, 0.15, 0.20, 0.25, 0.33, 0.40, 0.50]  // Small to large objects
         for s in scales {
             let bw = W * s
             let bh = H * s
