@@ -237,14 +237,58 @@ public actor VLMDetector: DetectionService {
     }
 
     private var diagnosticCallCount = 0  // Add counter for diagnostic logging
+    private var textEmbeddingDiagnosticDone = false  // Track if we've checked text embeddings
 
     private func scoreLabelBank(base: CIImage, rect: CGRect, imageModel: MLModel) -> (String, Double) {
-        let crop = base.cropped(to: rect)
+        // First time: check text embedding diversity
+        if !textEmbeddingDiagnosticDone && textEmbeddings.count >= 10 {
+            textEmbeddingDiagnosticDone = true
+            print("VLMDetector: TEXT EMBEDDING DIAGNOSTIC")
+            print("VLMDetector: Total text embeddings: \(textEmbeddings.count)")
+            print("VLMDetector: First 10 labels: \(labelBank.prefix(10).joined(separator: ", "))")
+
+            // Check diversity: compare first embedding to several others
+            let emb0 = textEmbeddings[0]
+            let label0 = labelBank[0]
+            for i in [1, 50, 100, 200, 500, 1000].filter({ $0 < textEmbeddings.count }) {
+                let sim = VLMDetector.cosine01(emb0, textEmbeddings[i])
+                print("VLMDetector: Similarity '\(label0)' vs '\(labelBank[i])': \(Int(sim*100))%")
+            }
+
+            // Check if all embeddings are suspiciously similar
+            var totalSim = 0.0
+            var count = 0
+            for i in 1..<min(10, textEmbeddings.count) {
+                totalSim += VLMDetector.cosine01(textEmbeddings[0], textEmbeddings[i])
+                count += 1
+            }
+            let avgSim = totalSim / Double(count)
+            print("VLMDetector: Average similarity of first 10 embeddings: \(Int(avgSim*100))%")
+            if avgSim > 0.80 {
+                print("VLMDetector: ⚠️ WARNING: Text embeddings are too similar! Average similarity \(Int(avgSim*100))% (should be <50%)")
+            }
+        }
+        // Ensure crop rect is valid and within base image bounds
+        let imageExtent = base.extent
+        let clampedRect = rect.intersection(imageExtent)
+        guard clampedRect.width > 0 && clampedRect.height > 0 else {
+            if diagnosticCallCount <= 5 {
+                print("VLMDetector.scoreLabelBank: Invalid rect - out of bounds")
+            }
+            return ("", 0.0)
+        }
+
+        let crop = base.cropped(to: clampedRect)
         let scaleX = CGFloat(cropSize) / crop.extent.width
         let scaleY = CGFloat(cropSize) / crop.extent.height
         let scaled = crop.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
-        guard let cg = ciContext.createCGImage(scaled, from: CGRect(x: 0, y: 0, width: cropSize, height: cropSize)) else {
-            print("VLMDetector.scoreLabelBank: Failed to create CGImage")
+
+        // Create CGImage with proper bounds
+        let targetRect = CGRect(x: 0, y: 0, width: cropSize, height: cropSize)
+        guard let cg = ciContext.createCGImage(scaled, from: targetRect) else {
+            if diagnosticCallCount <= 5 {
+                print("VLMDetector.scoreLabelBank: Failed to create CGImage from rect \(clampedRect)")
+            }
             return ("", 0.0)
         }
         var pb: CVPixelBuffer?
