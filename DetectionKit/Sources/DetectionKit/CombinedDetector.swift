@@ -7,7 +7,7 @@ import CoreVideo
 
 public actor CombinedDetector: DetectionService {
     private let logger: Utilities.Logger
-    private let vlm: VLMDetector
+    private let vlm: VLMDetector?
     private let yolo: YOLOInterpreter
     private let filter: DetectionFilter
     private let referee: VLMReferee?
@@ -17,143 +17,132 @@ public actor CombinedDetector: DetectionService {
 
     public init(logger: Utilities.Logger = .shared) {
         self.logger = logger
-        // VLM-first: BALANCED settings for quality detections
-        // acceptGate 0.50 for reasonable confidence threshold
-        // Reduced maxProposals (500) for faster processing with large vocabulary (1203 labels)
-        // 500 proposals * 1203 labels = 600K comparisons per frame (reasonable)
-        // cropSize: 256 to match MobileCLIP input requirements
-        self.vlm = VLMDetector(logger: logger, cropSize: 256, acceptGate: 0.50, maxProposals: 500)
-        // YOLO as fallback with moderate thresholds for debugging
-        self.yolo = YOLOInterpreter(logger: logger, confidenceThreshold: 0.25, iouThreshold: 0.45)
+        // YOLO-FIRST ARCHITECTURE: Fast, proven, object-aware detection
+        // YOLO is the primary detector with high recall settings
+        self.yolo = YOLOInterpreter(logger: logger, confidenceThreshold: 0.15, iouThreshold: 0.35)
         self.filter = DetectionFilter()
-        // Initialize VLM referee with relaxed gates for verification
-        self.referee = try? VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.60, minKeepGate: 0.40, maxProposals: 48)
+
+        // VLM Referee: VERIFICATION ONLY (not proposal generation)
+        // Verifies uncertain YOLO detections (confidence 0.15-0.70)
+        // acceptGate 0.75 for reliable verification
+        // Higher gate prevents false positives from corrupted embeddings
+        self.referee = try? VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.75, minKeepGate: 0.50, maxProposals: 64)
         self.refereeReady = (referee != nil)
+
+        // VLM Detector: DISABLED for MVP (grid proposals too slow and inaccurate)
+        // Can re-enable later for open-vocabulary expansion
+        self.vlm = nil
+        self.vlmReady = false
     }
 
     public func prepare() async throws {
         // Guard against redundant preparation calls
-        guard !vlmReady && !yoloReady else {
-            let vlm = vlmReady
-            let yolo = yoloReady
-            await logger.log("CombinedDetector: Already prepared (VLM: \(vlm), YOLO: \(yolo)), skipping", level: .debug, category: "DetectionKit.CombinedDetector")
+        guard !yoloReady else {
+            await logger.log("CombinedDetector: Already prepared (YOLO-first mode), skipping", level: .debug, category: "DetectionKit.CombinedDetector")
             return
         }
 
-        await logger.log("CombinedDetector: Starting prepare()", level: .info, category: "DetectionKit.CombinedDetector")
+        await logger.log("CombinedDetector: Starting prepare() - YOLO-FIRST ARCHITECTURE", level: .info, category: "DetectionKit.CombinedDetector")
 
-        // Try VLM first
-        if !vlmReady {
-            do {
-                await logger.log("CombinedDetector: Preparing VLM...", level: .info, category: "DetectionKit.CombinedDetector")
-                try await vlm.prepare()
-                vlmReady = true
-                await logger.log("CombinedDetector: ✅ VLM READY", level: .info, category: "DetectionKit.CombinedDetector")
-            } catch {
-                vlmReady = false
-                await logger.log("CombinedDetector: ❌ VLM prepare FAILED: \(error)", level: .error, category: "DetectionKit.CombinedDetector")
-            }
-        }
-
-        // Always try YOLO as a fallback/augmenter
+        // Prepare YOLO (primary detector)
         if !yoloReady {
             do {
-                await logger.log("CombinedDetector: Preparing YOLO...", level: .info, category: "DetectionKit.CombinedDetector")
+                await logger.log("CombinedDetector: Preparing YOLO (primary detector)...", level: .info, category: "DetectionKit.CombinedDetector")
                 try await yolo.prepare()
                 yoloReady = true
-                await logger.log("CombinedDetector: ✅ YOLO READY", level: .info, category: "DetectionKit.CombinedDetector")
+                await logger.log("CombinedDetector: ✅ YOLO READY (primary)", level: .info, category: "DetectionKit.CombinedDetector")
             } catch {
                 yoloReady = false
                 await logger.log("CombinedDetector: ❌ YOLO prepare FAILED: \(error)", level: .error, category: "DetectionKit.CombinedDetector")
+                throw DetectionError.modelNotFound
             }
         }
 
-        let vlmStatus = vlmReady
-        let yoloStatus = yoloReady
-        await logger.log("CombinedDetector: Prepare complete - VLM: \(vlmStatus), YOLO: \(yoloStatus)", level: .info, category: "DetectionKit.CombinedDetector")
-
-        if !vlmReady && !yoloReady {
-            throw DetectionError.modelNotFound
+        // VLM Referee initialized during init() - no async preparation needed
+        let refereeStatus = refereeReady
+        if refereeStatus {
+            await logger.log("CombinedDetector: ✅ VLM REFEREE loaded (verification layer)", level: .info, category: "DetectionKit.CombinedDetector")
+        } else {
+            await logger.log("CombinedDetector: ⚠️ VLM Referee not available (YOLO-only mode)", level: .warning, category: "DetectionKit.CombinedDetector")
         }
+
+        await logger.log("CombinedDetector: Prepare complete - YOLO: ✅, VLM Referee: \(refereeStatus ? "✅" : "⚠️ disabled")", level: .info, category: "DetectionKit.CombinedDetector")
     }
 
     public func detect(on request: DetectionRequest) async throws -> [Detection] {
+        guard yoloReady else {
+            throw DetectionError.notPrepared
+        }
+
+        await logger.log("CombinedDetector: Starting detection - YOLO-FIRST mode", level: .info, category: "DetectionKit.CombinedDetector")
+
+        // Phase 1: YOLO Detection (PRIMARY - fast, proven, object-aware)
+        let yoloDetections: [Detection]
+        do {
+            yoloDetections = try await yolo.detect(on: request)
+            let count = yoloDetections.count
+            await logger.log("CombinedDetector: YOLO returned \(count) raw detections", level: .info, category: "DetectionKit.CombinedDetector")
+        } catch {
+            await logger.log("CombinedDetector: YOLO detection FAILED: \(error)", level: .error, category: "DetectionKit.CombinedDetector")
+            throw error
+        }
+
+        guard !yoloDetections.isEmpty else {
+            await logger.log("CombinedDetector: No YOLO detections found", level: .warning, category: "DetectionKit.CombinedDetector")
+            return []
+        }
+
+        // Phase 2: Filter and Bucket YOLO detections
+        let filtered = filter.filter(yoloDetections)
+        let autoAcceptCount = filtered.autoAccept.count
+        let needsVerifyCount = filtered.needsVerification.count
+        await logger.log("CombinedDetector: Filtered YOLO - Auto-accept: \(autoAcceptCount) (high conf), Needs verify: \(needsVerifyCount) (mid/low conf)", level: .info, category: "DetectionKit.CombinedDetector")
+
         var results: [Detection] = []
-        results.reserveCapacity(5000)
+        results.reserveCapacity(yoloDetections.count)
 
-        let vlmStatus = vlmReady
-        let yoloStatus = yoloReady
-        let refereeStatus = refereeReady
-        await logger.log("CombinedDetector: Starting detection - VLM ready: \(vlmStatus), YOLO ready: \(yoloStatus), Referee ready: \(refereeStatus)", level: .info, category: "DetectionKit.CombinedDetector")
+        // Auto-accept high-confidence YOLO detections (>0.60)
+        results.append(contentsOf: filtered.autoAccept)
 
-        // Phase 1: VLM-first detection (primary detector for open-vocabulary)
-        var vlmDetections: [Detection] = []
-        if vlmReady {
-            await logger.log("CombinedDetector: Attempting VLM detection...", level: .info, category: "DetectionKit.CombinedDetector")
-            do {
-                vlmDetections = try await vlm.detect(on: request)
-                let count = vlmDetections.count
-                await logger.log("CombinedDetector: VLM returned \(count) detections", level: .info, category: "DetectionKit.CombinedDetector")
-                results.append(contentsOf: vlmDetections)
-            } catch {
-                await logger.log("CombinedDetector: VLM detect failed (\(error)).", level: .error, category: "DetectionKit.CombinedDetector")
+        // Phase 3: VLM Referee Verification (for uncertain detections only)
+        if refereeReady, let referee = referee, !filtered.needsVerification.isEmpty {
+            #if canImport(CoreVideo)
+            if let pixelBuffer = request.pixelBuffer as? CVPixelBuffer {
+                await logger.log("CombinedDetector: Verifying \(filtered.needsVerification.count) uncertain YOLO detections with VLM Referee", level: .info, category: "DetectionKit.CombinedDetector")
+                let verified = referee.filterBatch(
+                    filtered.needsVerification,
+                    pixelBuffer: pixelBuffer,
+                    orientationRaw: request.imageOrientationRaw,
+                    minConf: 0.15,
+                    maxConf: 0.70,  // Only verify mid/low confidence
+                    maxVerify: 200,  // Limit verification workload
+                    earlyStopThreshold: 1000  // Stop when enough verified
+                )
+                results.append(contentsOf: verified)
+                let verifiedCount = verified.count
+                await logger.log("CombinedDetector: VLM Referee verified \(verifiedCount)/\(filtered.needsVerification.count) detections", level: .info, category: "DetectionKit.CombinedDetector")
             }
+            #endif
         } else {
-            await logger.log("CombinedDetector: VLM NOT READY - skipping VLM detection", level: .error, category: "DetectionKit.CombinedDetector")
+            // No referee available - accept mid-confidence detections without verification
+            let midConfDetections = filtered.needsVerification.filter { $0.confidence >= 0.40 }
+            results.append(contentsOf: midConfDetections)
+            await logger.log("CombinedDetector: No VLM Referee - accepting \(midConfDetections.count) mid-confidence detections (≥0.40) without verification", level: .warning, category: "DetectionKit.CombinedDetector")
         }
 
-        // Phase 2: Augment with YOLO only if VLM found very few results
-        // YOLO provides dense coverage but limited vocabulary
-        if yoloReady && results.count < 10 {
-            do {
-                let yoloDetections = try await yolo.detect(on: request)
-                let count = yoloDetections.count
-                await logger.log("CombinedDetector: Augmenting with YOLO (\(count) detections)", level: .debug, category: "DetectionKit.CombinedDetector")
-
-                // Filter YOLO detections through VLM referee for verification
-                if refereeReady, let referee = referee {
-                    #if canImport(CoreVideo)
-                    if let pixelBuffer = request.pixelBuffer as? CVPixelBuffer {
-                        let verified = referee.filterBatch(
-                            yoloDetections,
-                            pixelBuffer: pixelBuffer,
-                            orientationRaw: request.imageOrientationRaw,
-                            minConf: 0.15,
-                            maxConf: 1.0,  // Verify all YOLO detections
-                            maxVerify: 500,  // Limit YOLO augmentation
-                            earlyStopThreshold: 5000
-                        )
-                        results.append(contentsOf: verified)
-                        await logger.log("CombinedDetector: Added \(verified.count) verified YOLO detections", level: .debug, category: "DetectionKit.CombinedDetector")
-                    }
-                    #endif
-                } else {
-                    // No referee, apply basic filtering
-                    let filtered = filter.filter(yoloDetections)
-                    // Only accept high-confidence YOLO detections without VLM verification
-                    results.append(contentsOf: filtered.autoAccept)
-                }
-            } catch {
-                await logger.log("CombinedDetector: YOLO augmentation failed (\(error)).", level: .error, category: "DetectionKit.CombinedDetector")
-            }
-        }
-
-        // Phase 3: If both models failed, throw error
-        if results.isEmpty && !vlmReady && !yoloReady {
-            throw DetectionError.modelNotFound
-        }
-
-        // Phase 4: Final NMS and sort (VERY loose to preserve detections)
+        // Phase 4: Final NMS and sorting
         let beforeNMS = results.count
-        results = nms(results, iou: 0.75)  // Very loose - allow heavy overlap
+        results = nms(results, iou: 0.50)  // Standard NMS threshold
         results.sort { $0.confidence > $1.confidence }
 
         let finalCount = results.count
-        await logger.log("CombinedDetector: Before NMS: \(beforeNMS), After NMS: \(finalCount), Returning \(finalCount) final detections", level: .info, category: "DetectionKit.CombinedDetector")
+        await logger.log("CombinedDetector: Pipeline complete - Before NMS: \(beforeNMS), After NMS: \(finalCount)", level: .info, category: "DetectionKit.CombinedDetector")
 
-        // Log detection breakdown for debugging
-        let labels = results.prefix(20).map { "\($0.label)(\(Int($0.confidence*100))%)" }.joined(separator: ", ")
-        await logger.log("CombinedDetector: Top 20 detections: \(labels)", level: .info, category: "DetectionKit.CombinedDetector")
+        // Log top detections for debugging
+        if !results.isEmpty {
+            let topLabels = results.prefix(15).map { "\($0.label)(\(Int($0.confidence*100))%)" }.joined(separator: ", ")
+            await logger.log("CombinedDetector: Top 15 detections: \(topLabels)", level: .info, category: "DetectionKit.CombinedDetector")
+        }
 
         return results
     }

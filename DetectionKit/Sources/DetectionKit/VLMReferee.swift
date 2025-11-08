@@ -70,8 +70,10 @@ public struct VLMReferee: @unchecked Sendable {
             if localIsMobileCLIP {
                 pendingLogs.append(("Loaded MobileCLIP referee: \(imgURL.deletingPathExtension().lastPathComponent)", .info, "DetectionKit.VLMReferee"))
                 // Preload label bank and compute text embeddings for fast per-frame scoring
-                if let bankURL = resourceBundle.url(forResource: "labelbank_en", withExtension: "txt"),
-                   let txt = try? String(contentsOf: bankURL) {
+                // Prefer curated label bank (practical vocabulary for language learning)
+                let bankURL = resourceBundle.url(forResource: "labelbank_en_curated", withExtension: "txt")
+                    ?? resourceBundle.url(forResource: "labelbank_en", withExtension: "txt")
+                if let url = bankURL, let txt = try? String(contentsOf: url) {
                     let labels = txt
                         .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
                         .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }

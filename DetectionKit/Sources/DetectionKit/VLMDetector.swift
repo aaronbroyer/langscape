@@ -59,8 +59,11 @@ public actor VLMDetector: DetectionService {
             throw DetectionError.modelLoadFailed(error.localizedDescription)
         }
         guard let tokenizer else { throw DetectionError.modelLoadFailed("Tokenizer failed to init") }
-        // Load large label bank if present; else default smaller bank
-        let bankURL = bundle.url(forResource: "labelbank_en_large", withExtension: "txt") ?? bundle.url(forResource: "labelbank_en", withExtension: "txt")
+        // Prefer curated label bank (practical vocabulary for language learning)
+        // Falls back to standard banks if curated not found
+        let bankURL = bundle.url(forResource: "labelbank_en_curated", withExtension: "txt")
+            ?? bundle.url(forResource: "labelbank_en", withExtension: "txt")
+            ?? bundle.url(forResource: "labelbank_en_large", withExtension: "txt")
         guard let url = bankURL, let txt = try? String(contentsOf: url) else {
             throw DetectionError.modelLoadFailed("label bank file missing")
         }
