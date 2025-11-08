@@ -251,16 +251,16 @@ private actor DetectionProcessor {
     private var tracks: [UUID: Track] = [:]
     private var spatialIndex: SpatialIndex = SpatialIndex(gridSize: 10)
 
-    // Tracking parameters (Phase 3: adjusted for high-scale detection)
-    private let iouThreshold: Double = 0.35  // Lower for crowded scenes
-    private let maxTrackAge: TimeInterval = 0.4  // Faster pruning
-    private let smoothingAlpha: Double = 0.3  // More responsive to movement
-    private let maxActiveTracks: Int = 5000  // Hard cap
+    // Tracking parameters (AGGRESSIVE: emit almost everything immediately)
+    private let iouThreshold: Double = 0.30  // Very loose for crowded scenes
+    private let maxTrackAge: TimeInterval = 1.0  // Keep tracks longer
+    private let smoothingAlpha: Double = 0.1  // Minimal smoothing - show detections fast
+    private let maxActiveTracks: Int = 10000  // Very high cap
 
-    // Confidence-based hit requirements (Phase 3)
-    private let highConfidenceHits: Int = 1  // >0.70: emit immediately
-    private let midConfidenceHits: Int = 2   // 0.40-0.70: 2 hits
-    private let lowConfidenceHits: Int = 3   // 0.15-0.40: 3 hits
+    // Confidence-based hit requirements (AGGRESSIVE: emit immediately)
+    private let highConfidenceHits: Int = 1  // >0.40: emit immediately
+    private let midConfidenceHits: Int = 1   // 0.20-0.40: emit immediately
+    private let lowConfidenceHits: Int = 1   // All detections: emit immediately (no filtering)
 
     // Label voting window (Phase 3)
     private let labelVotingWindow: Int = 5
@@ -393,15 +393,10 @@ private actor DetectionProcessor {
         return scores.max(by: { $0.value < $1.value })?.key ?? history.last!.label
     }
 
-    /// Get required hits based on confidence (Phase 3: confidence-based promotion)
+    /// Get required hits based on confidence (AGGRESSIVE: always 1 hit)
     private func getRequiredHits(confidence: Double) -> Int {
-        if confidence > 0.70 {
-            return highConfidenceHits  // 1 hit
-        } else if confidence >= 0.40 {
-            return midConfidenceHits   // 2 hits
-        } else {
-            return lowConfidenceHits   // 3 hits
-        }
+        // Emit everything immediately - no hit requirements
+        return 1
     }
 
     /// Prune lowest-confidence tracks to stay within capacity limit

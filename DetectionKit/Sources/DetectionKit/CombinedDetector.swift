@@ -17,14 +17,15 @@ public actor CombinedDetector: DetectionService {
 
     public init(logger: Utilities.Logger = .shared) {
         self.logger = logger
-        // VLM-first: use high maxProposals for dense coverage of thousands of objects
-        // Lower acceptGate to 0.80 for better recall while maintaining quality
-        self.vlm = VLMDetector(logger: logger, cropSize: 224, acceptGate: 0.80, maxProposals: 500)
-        // YOLO as minimal fallback (high-recall thresholds)
-        self.yolo = YOLOInterpreter(logger: logger, confidenceThreshold: 0.15, iouThreshold: 0.35)
+        // VLM-first: AGGRESSIVE settings for maximum detection of thousands of objects
+        // Very low acceptGate (0.50) for maximum recall - accept more proposals
+        // Very high maxProposals (3000) for dense coverage
+        self.vlm = VLMDetector(logger: logger, cropSize: 224, acceptGate: 0.50, maxProposals: 3000)
+        // YOLO disabled by setting impossible thresholds - rely ONLY on VLM
+        self.yolo = YOLOInterpreter(logger: logger, confidenceThreshold: 0.95, iouThreshold: 0.01)
         self.filter = DetectionFilter()
-        // Initialize VLM referee for verification of YOLO detections
-        self.referee = try? VLMReferee(logger: logger, cropSize: 224, acceptGate: 0.85, minKeepGate: 0.70, maxProposals: 48)
+        // Initialize VLM referee with relaxed gates for verification
+        self.referee = try? VLMReferee(logger: logger, cropSize: 224, acceptGate: 0.60, minKeepGate: 0.40, maxProposals: 48)
         self.refereeReady = (referee != nil)
     }
 
@@ -109,12 +110,18 @@ public actor CombinedDetector: DetectionService {
             throw DetectionError.modelNotFound
         }
 
-        // Phase 4: Final NMS and sort
-        results = nms(results, iou: 0.4)
+        // Phase 4: Final NMS and sort (VERY loose to preserve detections)
+        let beforeNMS = results.count
+        results = nms(results, iou: 0.75)  // Very loose - allow heavy overlap
         results.sort { $0.confidence > $1.confidence }
 
         let finalCount = results.count
-        await logger.log("CombinedDetector: Returning \(finalCount) final detections", level: .info, category: "DetectionKit.CombinedDetector")
+        await logger.log("CombinedDetector: Before NMS: \(beforeNMS), After NMS: \(finalCount), Returning \(finalCount) final detections", level: .info, category: "DetectionKit.CombinedDetector")
+
+        // Log detection breakdown for debugging
+        let labels = results.prefix(20).map { "\($0.label)(\(Int($0.confidence*100))%)" }.joined(separator: ", ")
+        await logger.log("CombinedDetector: Top 20 detections: \(labels)", level: .info, category: "DetectionKit.CombinedDetector")
+
         return results
     }
 
