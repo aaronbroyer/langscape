@@ -63,7 +63,7 @@ private struct AppFlowView: View {
             }
         }
         .onAppear(perform: configureInitialRoute)
-        .onChange(of: settings.hasCompletedOnboarding) { completed in
+        .onChange(of: settings.hasCompletedOnboarding) { _, completed in
             if completed {
                 transitionToExperience()
             }
