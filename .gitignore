@@ -34,3 +34,5 @@ LLMKit/Resources/marian_*/
 datasets/openimages/
 datasets/objects365/
 OID/datasets/
+
+*.log
