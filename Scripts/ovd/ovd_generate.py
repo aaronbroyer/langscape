@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 import numpy as np
+import torch
 import cv2
 from tqdm import tqdm
 from PIL import Image
@@ -184,4 +185,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
