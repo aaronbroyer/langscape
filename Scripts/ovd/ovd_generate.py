@@ -83,7 +83,8 @@ def generate(args):
     name_to_id = {name: i for i, name in enumerate(prompts)}
 
     proc = OwlViTProcessor.from_pretrained(args.model)
-    model = OwlViTForObjectDetection.from_pretrained(args.model)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = OwlViTForObjectDetection.from_pretrained(args.model).to(device)
     model.eval()
 
     images = []
@@ -98,10 +99,11 @@ def generate(args):
             continue
 
         inputs = proc(text=[[p for p in prompts]], images=image, return_tensors="pt")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         with np.errstate(all='ignore'):
             outputs = model(**inputs)
-        target_sizes = torch.tensor([image.size[::-1]]) if 'torch' in str(type(model.device)) else None
-        results = proc.post_process_object_detection(outputs=outputs, threshold=args.conf, target_sizes=[(image.height, image.width)])[0]
+        target_sizes = torch.tensor([(image.height, image.width)], device=device)
+        results = proc.post_process_object_detection(outputs=outputs, threshold=args.conf, target_sizes=target_sizes)[0]
 
         boxes = results['boxes'].tolist() if 'boxes' in results else []
         scores = results['scores'].tolist() if 'scores' in results else []
