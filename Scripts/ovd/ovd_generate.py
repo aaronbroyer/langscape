@@ -17,7 +17,7 @@ import argparse
 import json
 import math
 from pathlib import Path
-from typing import List, Tuple
+from typing import Iterable, List, Tuple
 
 import numpy as np
 import torch
@@ -91,6 +91,7 @@ def generate(args):
     imroot = Path(args.images)
     for ext in ('*.jpg', '*.jpeg', '*.png', '*.bmp'):
         images.extend(imroot.rglob(ext))
+    chunk_size = max(1, args.prompt_chunk)
 
     for img_path in tqdm(images, desc='OVD inference'):
         try:
@@ -98,16 +99,25 @@ def generate(args):
         except Exception:
             continue
 
-        inputs = proc(text=[[p for p in prompts]], images=image, return_tensors="pt")
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        with np.errstate(all='ignore'):
-            outputs = model(**inputs)
-        target_sizes = torch.tensor([(image.height, image.width)], device=device)
-        results = proc.post_process_object_detection(outputs=outputs, threshold=args.conf, target_sizes=target_sizes)[0]
-
-        boxes = results['boxes'].tolist() if 'boxes' in results else []
-        scores = results['scores'].tolist() if 'scores' in results else []
-        labels = results['labels'].tolist() if 'labels' in results else []
+        boxes: List[List[float]] = []
+        scores: List[float] = []
+        labels_idx: List[int] = []
+        for start in range(0, len(prompts), chunk_size):
+            chunk = prompts[start:start + chunk_size]
+            inputs = proc(text=[chunk], images=image, return_tensors="pt")
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            with np.errstate(all='ignore'):
+                outputs = model(**inputs)
+            target_sizes = torch.tensor([(image.height, image.width)], device=device)
+            result = proc.post_process_object_detection(
+                outputs=outputs, threshold=args.conf, target_sizes=target_sizes
+            )[0]
+            chunk_boxes = result.get('boxes', [])
+            chunk_scores = result.get('scores', [])
+            chunk_labels = result.get('labels', [])
+            boxes.extend(chunk_boxes.tolist())
+            scores.extend(chunk_scores.tolist())
+            labels_idx.extend((chunk_labels + start).tolist())
 
         if not boxes:
             continue
@@ -125,7 +135,7 @@ def generate(args):
             asp = (max(bw, bh) / max(1e-6, min(bw, bh))) if bw > 0 and bh > 0 else 1e6
             if area < args.min_area or asp > args.max_aspect:
                 continue
-            cls_name = prompts[labels[i]]
+            cls_name = prompts[labels_idx[i]]
             cls_id = name_to_id.get(cls_name, None)
             if cls_id is None:
                 continue
@@ -175,6 +185,7 @@ def main():
     ap.add_argument('--iou', type=float, default=0.5)
     ap.add_argument('--min-area', type=float, default=0.004)
     ap.add_argument('--max-aspect', type=float, default=6.0)
+    ap.add_argument('--prompt-chunk', type=int, default=128, help='Number of prompts per forward pass')
     ap.add_argument('--clean', help='Run only cleanup on an existing ovd-data dir')
     args = ap.parse_args()
 
