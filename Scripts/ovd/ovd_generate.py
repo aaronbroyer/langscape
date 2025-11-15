@@ -91,9 +91,13 @@ def generate(args):
     imroot = Path(args.images)
     for ext in ('*.jpg', '*.jpeg', '*.png', '*.bmp'):
         images.extend(imroot.rglob(ext))
+    images.sort()
+    existing = {p.stem for p in (out / 'labels').glob('*.txt')} if args.resume else set()
     chunk_size = max(1, args.prompt_chunk)
 
     for img_path in tqdm(images, desc='OVD inference'):
+        if img_path.stem in existing:
+            continue
         try:
             image = Image.open(img_path).convert('RGB')
         except Exception:
@@ -187,6 +191,7 @@ def main():
     ap.add_argument('--max-aspect', type=float, default=6.0)
     ap.add_argument('--prompt-chunk', type=int, default=128, help='Number of prompts per forward pass')
     ap.add_argument('--clean', help='Run only cleanup on an existing ovd-data dir')
+    ap.add_argument('--resume', action='store_true', help='Skip images that already have labels')
     args = ap.parse_args()
 
     if args.clean:
