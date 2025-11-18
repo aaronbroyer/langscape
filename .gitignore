@@ -37,3 +37,6 @@ datasets/objects365/
 OID/datasets/
 
 *.log
+
+*.mlpackage
+*.mlmodelc
