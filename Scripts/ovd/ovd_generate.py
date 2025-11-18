@@ -163,6 +163,28 @@ def generate(args):
         (out / 'labels' / (img_path.stem + '.txt')).write_text('\n'.join(yolo_lines), encoding='utf-8')
 
 
+def merge_boxes(boxes, merge_iou):
+    """Merge overlapping boxes per class using simple averaging."""
+    merged = []
+    for b in boxes:
+        merged_any = False
+        for i, mb in enumerate(merged):
+            if iou(b, mb) >= merge_iou:
+                # average the two boxes
+                avg = (
+                    (b[0] + mb[0]) / 2,
+                    (b[1] + mb[1]) / 2,
+                    (b[2] + mb[2]) / 2,
+                    (b[3] + mb[3]) / 2,
+                )
+                merged[i] = avg
+                merged_any = True
+                break
+        if not merged_any:
+            merged.append(b)
+    return merged
+
+
 def clean(args):
     root = Path(args.clean)
     labels_dir = root / 'labels'
@@ -171,10 +193,46 @@ def clean(args):
         lines = [ln.strip() for ln in p.read_text().splitlines() if ln.strip()]
         if not lines:
             continue
-        # Very light dedupe: merge identical class+box lines
+        # Dedupe exact duplicates
         uniq = list(dict.fromkeys(lines))
-        if uniq != lines:
-            p.write_text('\n'.join(uniq), encoding='utf-8')
+        cleaned = []
+        # bucket by class for optional merging
+        class_to_boxes = {}
+        W = H = 1.0  # normalized coords, so width/height = 1
+        for ln in uniq:
+            parts = ln.split()
+            if len(parts) != 5:
+                continue
+            cls, cx, cy, w, h = parts
+            try:
+                cls_id = int(float(cls))
+                cx, cy, w, h = map(float, (cx, cy, w, h))
+            except ValueError:
+                continue
+            area = w * h
+            if area < args.min_area:
+                continue
+            aspect = (max(w, h) / max(1e-6, min(w, h))) if w > 0 and h > 0 else 1e6
+            if aspect > args.max_aspect:
+                continue
+            # convert to xyxy normalized
+            x1 = cx - w / 2
+            y1 = cy - h / 2
+            x2 = cx + w / 2
+            y2 = cy + h / 2
+            class_to_boxes.setdefault(cls_id, []).append((x1, y1, x2, y2))
+
+        for cls_id, boxes in class_to_boxes.items():
+            merged = merge_boxes(boxes, args.merge_iou) if args.merge_iou > 0 else boxes
+            for x1, y1, x2, y2 in merged:
+                w = x2 - x1
+                h = y2 - y1
+                cx = x1 + w / 2
+                cy = y1 + h / 2
+                cleaned.append(f"{cls_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+
+        if cleaned != lines:
+            p.write_text('\n'.join(cleaned), encoding='utf-8')
             updated += 1
     print(f"Cleaned {updated} label files")
 
@@ -189,6 +247,7 @@ def main():
     ap.add_argument('--iou', type=float, default=0.5)
     ap.add_argument('--min-area', type=float, default=0.004)
     ap.add_argument('--max-aspect', type=float, default=6.0)
+    ap.add_argument('--merge-iou', type=float, default=0.0, help='IoU threshold to merge overlapping boxes during clean')
     ap.add_argument('--prompt-chunk', type=int, default=128, help='Number of prompts per forward pass')
     ap.add_argument('--clean', help='Run only cleanup on an existing ovd-data dir')
     ap.add_argument('--resume', action='store_true', help='Skip images that already have labels')
