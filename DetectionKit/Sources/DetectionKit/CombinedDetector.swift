@@ -26,8 +26,15 @@ public actor CombinedDetector: DetectionService {
         // Verifies uncertain YOLO detections (confidence 0.15-0.70)
         // acceptGate 0.75 for reliable verification
         // Higher gate prevents false positives from corrupted embeddings
-        self.referee = try? VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.75, minKeepGate: 0.50, maxProposals: 64)
-        self.refereeReady = (referee != nil)
+        do {
+            let r = try VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.75, minKeepGate: 0.50, maxProposals: 64)
+            self.referee = r
+            self.refereeReady = true
+        } catch {
+            self.referee = nil
+            self.refereeReady = false
+            Task { await logger.log("CombinedDetector: ⚠️ Failed to init VLM Referee (\(error.localizedDescription)); YOLO-only mode", level: .error, category: "DetectionKit.CombinedDetector") }
+        }
 
         // VLM Detector: DISABLED for MVP (grid proposals too slow and inaccurate)
         // Can re-enable later for open-vocabulary expansion
@@ -176,4 +183,3 @@ public actor CombinedDetector: DetectionService {
         return inter / uni
     }
 }
-

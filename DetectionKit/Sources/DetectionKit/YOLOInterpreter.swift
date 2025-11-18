@@ -213,18 +213,17 @@ public actor YOLOInterpreter: DetectionService {
                 return url
             }
             if let pkg = Bundle.module.url(forResource: name, withExtension: "mlpackage") {
-                return pkg
+                do {
+                    let compiled = try await compileModelIfNeeded(pkg)
+                    return compiled
+                } catch {
+                    await logger.log("Failed to compile \(pkg.lastPathComponent): \(error.localizedDescription)", level: .error, category: "DetectionKit.YOLOInterpreter")
+                }
             }
             // If a raw .mlmodel is included, compile it on device.
             if let raw = Bundle.module.url(forResource: name, withExtension: "mlmodel") {
                 do {
-                    let compiled: URL
-                    if #available(iOS 18.0, macOS 15.0, *) {
-                        compiled = try await MLModel.compileModel(at: raw)
-                    } else {
-                        compiled = try await MLModel.compileModel(at: raw)
-                    }
-                    return compiled
+                    return try await compileModelIfNeeded(raw)
                 } catch {
                     await logger.log("Failed to compile \(raw.lastPathComponent): \(error.localizedDescription)", level: .error, category: "DetectionKit.YOLOInterpreter")
                 }
@@ -236,6 +235,12 @@ public actor YOLOInterpreter: DetectionService {
             return mock // Still usable (produces no boxes unless converted), but at least loads.
         }
         return nil
+    }
+    private func compileModelIfNeeded(_ url: URL) async throws -> URL {
+        if url.pathExtension == "mlmodelc" {
+            return url
+        }
+        return try await MLModel.compileModel(at: url)
     }
     #endif
 }

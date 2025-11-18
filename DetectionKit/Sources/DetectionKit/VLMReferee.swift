@@ -61,62 +61,95 @@ public struct VLMReferee: @unchecked Sendable {
         var localIsMobileCLIP = false
         var pendingLogs: [(String, Utilities.Logger.Level, String)] = []
 
-        // Try MobileCLIP (preferred if present)
-        if let (txtURL, imgURL) = VLMReferee.locateMobileCLIP(in: resourceBundle) {
-            localClipText = try? MLModel(contentsOf: txtURL)
-            localClipImage = try? MLModel(contentsOf: imgURL)
+        // Try MobileCLIP (preferred if present). Walk variants until one loads.
+        let clipVariants = ["s2", "s1", "b", "blt", "s0"]
+        variantLoop: for variant in clipVariants {
+            guard let (txtURL, imgURL) = VLMReferee.locateMobileCLIP(in: resourceBundle, variant: variant) else { continue }
+
+            do {
+                localClipText = try VLMReferee.loadModel(at: txtURL, logger: logger, label: "MobileCLIP text \(variant)")
+            } catch {
+                pendingLogs.append(("Failed to load MobileCLIP text \(variant): \(error.localizedDescription)", .error, "DetectionKit.VLMReferee"))
+                continue
+            }
+
+            do {
+                localClipImage = try VLMReferee.loadModel(at: imgURL, logger: logger, label: "MobileCLIP image \(variant)")
+            } catch {
+                pendingLogs.append(("Failed to load MobileCLIP image \(variant): \(error.localizedDescription)", .error, "DetectionKit.VLMReferee"))
+                localClipText = nil
+                continue
+            }
+
             localClipTokenizer = CLIPTokenizer(bundle: resourceBundle)
-            localIsMobileCLIP = (localClipText != nil && localClipImage != nil && localClipTokenizer != nil)
-            if localIsMobileCLIP {
-                pendingLogs.append(("Loaded MobileCLIP referee: \(imgURL.deletingPathExtension().lastPathComponent)", .info, "DetectionKit.VLMReferee"))
-                // Preload label bank and compute text embeddings for fast per-frame scoring
-                // Prefer curated label bank (practical vocabulary for language learning)
-                let bankURL = resourceBundle.url(forResource: "labelbank_en_curated", withExtension: "txt")
-                    ?? resourceBundle.url(forResource: "labelbank_en", withExtension: "txt")
-                if let url = bankURL, let txt = try? String(contentsOf: url) {
-                    let labels = txt
-                        .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
-                        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                        .filter { !$0.isEmpty && !$0.hasPrefix("#") }
-                    if let tModel = localClipText, let tok = localClipTokenizer {
-                        var pairs: [(String, [Double])] = []
-                        pairs.reserveCapacity(labels.count)
-                        for label in labels {
-                            if let emb = Self.embedText(label: label, tokenizer: tok, model: tModel) {
-                                pairs.append((label, emb))
-                            }
+            if localClipTokenizer == nil {
+                pendingLogs.append(("Failed to load CLIP tokenizer (merges/vocab missing?)", .error, "DetectionKit.VLMReferee"))
+                localClipText = nil
+                localClipImage = nil
+                continue
+            }
+
+            localIsMobileCLIP = true
+            pendingLogs.append(("Loaded MobileCLIP referee variant: \(variant)", .info, "DetectionKit.VLMReferee"))
+
+            // Preload label bank and compute text embeddings for fast per-frame scoring
+            // Prefer the large bank for vocabulary coverage; fall back to curated if missing
+            let bankURL = resourceBundle.url(forResource: "labelbank_en_large", withExtension: "txt")
+                ?? resourceBundle.url(forResource: "labelbank_en_curated", withExtension: "txt")
+                ?? resourceBundle.url(forResource: "labelbank_en", withExtension: "txt")
+            if let url = bankURL, let txt = try? String(contentsOf: url) {
+                let labels = txt
+                    .split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                    .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+                if let tModel = localClipText, let tok = localClipTokenizer {
+                    var pairs: [(String, [Double])] = []
+                    pairs.reserveCapacity(labels.count)
+                    for label in labels {
+                        if let emb = Self.embedText(label: label, tokenizer: tok, model: tModel) {
+                            pairs.append((label, emb))
                         }
-                        localLabelBank = pairs.map { $0.0 }
-                        localTextEmbeddings = pairs.map { $0.1 }
-                        let preparedCount = pairs.count
-                        pendingLogs.append(("Prepared \(preparedCount) VLM label embeddings", .info, "DetectionKit.VLMReferee"))
                     }
+                    localLabelBank = pairs.map { $0.0 }
+                    localTextEmbeddings = pairs.map { $0.1 }
+                    let preparedCount = pairs.count
+                    pendingLogs.append(("Prepared \(preparedCount) VLM label embeddings", .info, "DetectionKit.VLMReferee"))
                 }
             }
+
+            break variantLoop
+        }
+
+        if !localIsMobileCLIP {
+            pendingLogs.append(("MobileCLIP not found or failed to load; will try single-model VLM", .warning, "DetectionKit.VLMReferee"))
         }
 
         // Fallback to single‑model VLM packaged as one CoreML bundle
         if !localIsMobileCLIP {
-            guard let url = VLMReferee.locateSingleModel(in: resourceBundle) else {
-                throw Error.modelNotFound
-            }
-            let mdl = try MLModel(contentsOf: url)
-            localModel = mdl
-            let inputs = mdl.modelDescription.inputDescriptionsByName
-            let outputs = mdl.modelDescription.outputDescriptionsByName
-            if let (k, _) = inputs.first(where: { $0.value.type == MLFeatureType.image }) { localImageFeature = k } else { throw Error.modelNotFound }
-            if let (k, _) = inputs.first(where: { $0.value.type == MLFeatureType.string }) { localTextFeature = k } else { throw Error.modelNotFound }
-            if let (k, _) = outputs.first(where: { $0.value.type == MLFeatureType.double }) {
-                localOutputFeature = k
-                localYesKey = nil
-            } else if let (k, _) = outputs.first(where: { $0.value.type == MLFeatureType.dictionary }) {
-                localOutputFeature = k
-                localYesKey = "yes"
+            if let url = VLMReferee.locateSingleModel(in: resourceBundle) {
+                do {
+                    let mdl = try VLMReferee.loadModel(at: url, logger: logger, label: "VLM referee")
+                    localModel = mdl
+                    let inputs = mdl.modelDescription.inputDescriptionsByName
+                    let outputs = mdl.modelDescription.outputDescriptionsByName
+                    if let (k, _) = inputs.first(where: { $0.value.type == MLFeatureType.image }) { localImageFeature = k } else { pendingLogs.append(("Single-model VLM missing image input", .error, "DetectionKit.VLMReferee")) }
+                    if let (k, _) = inputs.first(where: { $0.value.type == MLFeatureType.string }) { localTextFeature = k } else { pendingLogs.append(("Single-model VLM missing text input", .error, "DetectionKit.VLMReferee")) }
+                    if let (k, _) = outputs.first(where: { $0.value.type == MLFeatureType.double }) {
+                        localOutputFeature = k
+                        localYesKey = nil
+                    } else if let (k, _) = outputs.first(where: { $0.value.type == MLFeatureType.dictionary }) {
+                        localOutputFeature = k
+                        localYesKey = "yes"
+                    } else {
+                        pendingLogs.append(("Single-model VLM missing usable output", .error, "DetectionKit.VLMReferee"))
+                    }
+                    pendingLogs.append(("Loaded VLM referee: \(url.lastPathComponent)", .info, "DetectionKit.VLMReferee"))
+                } catch {
+                    pendingLogs.append(("Failed to load single-model VLM: \(error.localizedDescription)", .error, "DetectionKit.VLMReferee"))
+                }
             } else {
-                localOutputFeature = nil
-                localYesKey = nil
+                pendingLogs.append(("No VLM referee model found in bundle", .error, "DetectionKit.VLMReferee"))
             }
-            pendingLogs.append(("Loaded VLM referee: \(url.lastPathComponent)", .info, "DetectionKit.VLMReferee"))
         }
 
         // One-time assignment to immutable properties
@@ -135,6 +168,11 @@ public struct VLMReferee: @unchecked Sendable {
         // Emit logs now that initialization is complete
         for (msg, lvl, cat) in pendingLogs {
             Task { await logger.log(msg, level: lvl, category: cat) }
+        }
+
+        // Surface a hard failure if nothing was loaded
+        if !localIsMobileCLIP && localModel == nil {
+            throw Error.modelNotFound
         }
     }
 
@@ -413,18 +451,35 @@ public struct VLMReferee: @unchecked Sendable {
         return nil
     }
 
-    private static func locateMobileCLIP(in bundle: Bundle) -> (text: URL, image: URL)? {
-        // Prefer stronger variants first
-        let variants = ["s2", "s1", "b", "blt", "s0"]
-        for v in variants {
-            let txtName = "mobileclip_\(v)_text"
-            let imgName = "mobileclip_\(v)_image"
-            if let txt = bundle.url(forResource: txtName, withExtension: "mlpackage"),
-               let img = bundle.url(forResource: imgName, withExtension: "mlpackage") {
-                return (txt, img)
-            }
+    private static func locateMobileCLIP(in bundle: Bundle, variant: String) -> (text: URL, image: URL)? {
+        let txtName = "mobileclip_\(variant)_text"
+        let imgName = "mobileclip_\(variant)_image"
+        if let txt = bundle.url(forResource: txtName, withExtension: "mlpackage"),
+           let img = bundle.url(forResource: imgName, withExtension: "mlpackage") {
+            return (txt, img)
         }
         return nil
+    }
+
+    private static func loadModel(at url: URL, logger: Utilities.Logger, label: String) throws -> MLModel {
+        let compiledURL: URL
+        if url.pathExtension == "mlmodelc" {
+            compiledURL = url
+        } else {
+            do {
+                compiledURL = try MLModel.compileModel(at: url)
+            } catch {
+                Task { await logger.log("Failed to compile \(label) \(url.lastPathComponent): \(error.localizedDescription)", level: .error, category: "DetectionKit.VLMReferee") }
+                throw error
+            }
+        }
+
+        do {
+            return try MLModel(contentsOf: compiledURL)
+        } catch {
+            Task { await logger.log("Failed to load \(label) \(compiledURL.lastPathComponent): \(error.localizedDescription)", level: .error, category: "DetectionKit.VLMReferee") }
+            throw error
+        }
     }
     #else
     public init(bundle: Bundle? = nil, logger: Utilities.Logger = .shared, cropSize: Int = 224, acceptGate: Double = 0.7) throws { throw Error.modelNotFound }
