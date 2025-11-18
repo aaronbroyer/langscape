@@ -15,6 +15,7 @@ xcuserdata/
 /yolov8*.mlpackage/
 runs*/
 ovd-data/
+*.mlpackage
 
 # Python artifacts
 __pycache__/
