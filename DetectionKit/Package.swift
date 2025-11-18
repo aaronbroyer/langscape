@@ -23,11 +23,8 @@ let package = Package(
                 "Utilities"
             ],
             resources: [
-                // Mock models
-                .copy("Resources/MockYOLO.mlmodelc"),
-                // YOLO models (Phase 1: high-recall detection)
-                .copy("Resources/YOLOv8l.mlpackage"),
-                .copy("Resources/YOLOv8m.mlpackage"),
+                // YOLO model (OVD student)
+                .copy("Resources/YOLOv8-ovd.mlpackage"),
                 // MobileCLIP models (VLM for open-vocabulary detection)
                 .copy("Resources/mobileclip_s2_text.mlpackage"),
                 .copy("Resources/mobileclip_s2_image.mlpackage"),
@@ -35,6 +32,7 @@ let package = Package(
                 .copy("Resources/mobileclip_s0_image.mlpackage"),
                 // Label banks and vocabularies
                 .copy("Resources/labelbank_en.txt"),
+                .copy("Resources/labelbank_en_curated.txt"),
                 .copy("Resources/labelbank_en_large.txt"),
                 .copy("Resources/clip-vocab.json"),
                 .copy("Resources/clip-merges.txt")
