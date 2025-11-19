@@ -35,6 +35,7 @@ LLMKit/Resources/marian_*/
 datasets/openimages/
 datasets/objects365/
 OID/datasets/
+OID/csv_folder/train-annotations-bbox.csv
 
 *.log
 
