@@ -730,8 +730,10 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         guard now - lastFrameTime >= 0.25 else { return }
         lastFrameTime = now
 
-        if contextManager.shouldClassifyScene {
-            Task { await contextManager.classify(frame.capturedImage) }
+        Task { @MainActor [contextManager] in
+            if contextManager.shouldClassifyScene {
+                await contextManager.classify(frame.capturedImage)
+            }
         }
 
         #if canImport(ImageIO)
