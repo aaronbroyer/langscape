@@ -53,6 +53,7 @@ public actor YOLOInterpreter: DetectionService {
     private var backend: Backend = .mock
     private var maxDetections: Int = 5000
     private var isPrepared = false
+    private var currentModelName: String?
 
     // NMS thresholds passed to the model (not client-side filtering)
     public let modelConfidenceThreshold: Double
@@ -73,31 +74,9 @@ public actor YOLOInterpreter: DetectionService {
         guard !isPrepared else { return }
 
         #if canImport(Vision)
-        if let modelURL = try? await locateModel() {
+        if let modelURL = try? await locateDefaultModel() {
             do {
-                var config = MLModelConfiguration()
-                #if os(iOS)
-                if #available(iOS 16.0, *) {
-                    config.computeUnits = .all
-                }
-                #endif
-                let mlModel = try MLModel(contentsOf: modelURL, configuration: config)
-                let visionModel = try VNCoreMLModel(for: mlModel)
-
-                // Configure NMS thresholds via feature provider
-                let thresholdProvider = YOLOThresholdProvider(
-                    confidenceThreshold: modelConfidenceThreshold,
-                    iouThreshold: modelIouThreshold
-                )
-                visionModel.featureProvider = thresholdProvider
-
-                // Only set inputImageFeatureName when the feature is actually an image.
-                if let imageInput = mlModel.modelDescription.inputDescriptionsByName.first(where: { $0.value.type == .image })?.key {
-                    visionModel.inputImageFeatureName = imageInput
-                }
-                backend = .vision(model: visionModel)
-                isPrepared = true
-                await logger.log("Loaded YOLO model: \(modelURL.lastPathComponent) with confidence=\(modelConfidenceThreshold), iou=\(modelIouThreshold)", level: .info, category: "DetectionKit.YOLOInterpreter")
+                try await configureVisionBackend(from: modelURL, contextLabel: "default")
                 return
             } catch {
                 await logger.log("Failed to load YOLO model: \(error.localizedDescription). Falling back to mock.", level: .error, category: "DetectionKit.YOLOInterpreter")
@@ -201,41 +180,95 @@ public actor YOLOInterpreter: DetectionService {
     }
 
     #if canImport(Vision)
-    private func locateModel() async throws -> URL? {
-        // Search for common YOLOv8 compiled model names in the SPM module bundle.
+    public func loadContext(_ contextName: String) async throws {
+        let canonical = canonicalContextName(contextName)
+        let resourceName = "yolo_world_\(canonical)"
+        if let url = try? await locateModel(named: resourceName) {
+            try await configureVisionBackend(from: url, contextLabel: contextName)
+            return
+        }
+
+        if canonical != "kitchen" {
+            await logger.log("YOLOInterpreter: Context model '\(contextName)' missing, falling back to kitchen.", level: .warning, category: "DetectionKit.YOLOInterpreter")
+            try await loadContext("kitchen")
+        } else {
+            await logger.log("YOLOInterpreter: Unable to load fallback kitchen model.", level: .error, category: "DetectionKit.YOLOInterpreter")
+            throw DetectionError.modelNotFound
+        }
+    }
+
+    private func locateDefaultModel() async throws -> URL? {
         let candidates = [
-            // Prefer distilled OVD student first, then larger YOLO variants
             "YOLOv8-ovd", "YOLOv8l", "YOLOv8m", "YOLOv8s", "YOLOv8", "YOLOv8n", "best", "Model"
         ]
 
         for name in candidates {
-            if let url = Bundle.module.url(forResource: name, withExtension: "mlmodelc") {
+            if let url = try? await locateModel(named: name) {
                 return url
-            }
-            if let pkg = Bundle.module.url(forResource: name, withExtension: "mlpackage") {
-                do {
-                    let compiled = try await compileModelIfNeeded(pkg)
-                    return compiled
-                } catch {
-                    await logger.log("Failed to compile \(pkg.lastPathComponent): \(error.localizedDescription)", level: .error, category: "DetectionKit.YOLOInterpreter")
-                }
-            }
-            // If a raw .mlmodel is included, compile it on device.
-            if let raw = Bundle.module.url(forResource: name, withExtension: "mlmodel") {
-                do {
-                    return try await compileModelIfNeeded(raw)
-                } catch {
-                    await logger.log("Failed to compile \(raw.lastPathComponent): \(error.localizedDescription)", level: .error, category: "DetectionKit.YOLOInterpreter")
-                }
             }
         }
 
-        // Fall back to the bundled mock model if present; use it only to validate resources.
         if let mock = Bundle.module.url(forResource: "MockYOLO", withExtension: "mlmodelc") {
-            return mock // Still usable (produces no boxes unless converted), but at least loads.
+            return mock
         }
         return nil
     }
+
+    private func locateModel(named resourceName: String) async throws -> URL? {
+        if let url = Bundle.module.url(forResource: resourceName, withExtension: "mlmodelc") {
+            return url
+        }
+        if let pkg = Bundle.module.url(forResource: resourceName, withExtension: "mlpackage") {
+            do {
+                return try await compileModelIfNeeded(pkg)
+            } catch {
+                await logger.log("Failed to compile \(pkg.lastPathComponent): \(error.localizedDescription)", level: .error, category: "DetectionKit.YOLOInterpreter")
+            }
+        }
+        if let raw = Bundle.module.url(forResource: resourceName, withExtension: "mlmodel") {
+            do {
+                return try await compileModelIfNeeded(raw)
+            } catch {
+                await logger.log("Failed to compile \(raw.lastPathComponent): \(error.localizedDescription)", level: .error, category: "DetectionKit.YOLOInterpreter")
+            }
+        }
+        return nil
+    }
+
+    private func configureVisionBackend(from modelURL: URL, contextLabel: String) async throws {
+        var config = MLModelConfiguration()
+        #if os(iOS)
+        if #available(iOS 16.0, *) {
+            config.computeUnits = .all
+        }
+        #endif
+        let mlModel = try MLModel(contentsOf: modelURL, configuration: config)
+        let visionModel = try VNCoreMLModel(for: mlModel)
+
+        let thresholdProvider = YOLOThresholdProvider(
+            confidenceThreshold: modelConfidenceThreshold,
+            iouThreshold: modelIouThreshold
+        )
+        visionModel.featureProvider = thresholdProvider
+
+        if let imageInput = mlModel.modelDescription.inputDescriptionsByName.first(where: { $0.value.type == .image })?.key {
+            visionModel.inputImageFeatureName = imageInput
+        }
+
+        backend = .vision(model: visionModel)
+        currentModelName = contextLabel
+        isPrepared = true
+        await logger.log("YOLOInterpreter: Loaded model '\(contextLabel)' (\(modelURL.lastPathComponent))", level: .info, category: "DetectionKit.YOLOInterpreter")
+    }
+
+    private func canonicalContextName(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "-", with: "_")
+    }
+
     private func compileModelIfNeeded(_ url: URL) async throws -> URL {
         if url.pathExtension == "mlmodelc" {
             return url
