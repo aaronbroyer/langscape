@@ -63,7 +63,11 @@ private struct AppFlowView: View {
                         contextManager: contextManager
                     )
                     .navigationBarBackButtonHidden(true)
-                    .toolbar(.hidden, for: .navigationBar)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            EmptyView()
+                        }
+                    }
                 }
             }
         }
