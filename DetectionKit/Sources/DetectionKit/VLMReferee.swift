@@ -13,6 +13,15 @@ import Vision
 import CoreImage
 #endif
 
+#if canImport(CoreVideo)
+import CoreVideo
+#endif
+
+public struct RefereeResponse: Codable, Equatable {
+    public let description: String
+    public let tags: [String]
+}
+
 public struct VLMReferee: @unchecked Sendable {
     public enum Error: Swift.Error { case modelNotFound }
 
@@ -37,14 +46,16 @@ public struct VLMReferee: @unchecked Sendable {
     private let acceptGate: Double
     private let minKeepGate: Double
     private let maxProposals: Int
+    private let geminiAPIKey: String?
 
-    public init(bundle: Bundle? = nil, logger: Utilities.Logger = .shared, cropSize: Int = 256, acceptGate: Double = 0.85, minKeepGate: Double = 0.70, maxProposals: Int = 48) throws {
+    public init(bundle: Bundle? = nil, logger: Utilities.Logger = .shared, cropSize: Int = 256, acceptGate: Double = 0.85, minKeepGate: Double = 0.70, maxProposals: Int = 48, geminiAPIKey: String? = nil) throws {
         let resourceBundle = bundle ?? Bundle.module
         self.logger = logger
         self.cropSize = cropSize
         self.acceptGate = acceptGate
         self.minKeepGate = minKeepGate
         self.maxProposals = maxProposals
+        self.geminiAPIKey = geminiAPIKey
 
         // Prepare locals for one-time assignment to lets
         var localModel: MLModel? = nil
@@ -177,6 +188,44 @@ public struct VLMReferee: @unchecked Sendable {
     }
 
     #if canImport(CoreVideo)
+    public func adjudicate(image: CVPixelBuffer, objectName: String) async throws -> RefereeResponse {
+        guard let apiKey = geminiAPIKey, !apiKey.isEmpty else {
+            throw DetectionError.modelNotFound
+        }
+        guard let base64Image = convertToBase64(pixelBuffer: image) else {
+            throw DetectionError.invalidInput
+        }
+
+        let promptText = """
+        Analyze this image crop. The user detects a '\(objectName)'. 1. Confirm or correct the object name. 2. Describe it in the target language using 3 adjectives (material, color, style). 3. Return strictly JSON: { "description": "...", "tags": [...] }
+        """
+        let jsonBody: [String: Any] = [
+            "contents": [
+                [
+                    "parts": [
+                        ["text": promptText],
+                        ["inline_data": ["mime_type": "image/jpeg", "data": base64Image]]
+                    ]
+                ]
+            ]
+        ]
+
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=\(apiKey)") else {
+            throw DetectionError.invalidInput
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: jsonBody)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 300 {
+            throw DetectionError.inferenceFailed("Gemini responded with status \(http.statusCode)")
+        }
+        return try parseGeminiResponse(data)
+    }
+
     /// Filter detections with VLM verification (legacy, single-threaded)
     public func filter(_ detections: [Detection], pixelBuffer: CVPixelBuffer, orientationRaw: UInt32?, minConf: Double = 0.30, maxConf: Double = 0.70) -> [Detection] {
         guard !detections.isEmpty else { return detections }
@@ -440,7 +489,58 @@ public struct VLMReferee: @unchecked Sendable {
         }
         return out.sorted { $0.confidence > $1.confidence }
     }
+
+    private func convertToBase64(pixelBuffer: CVPixelBuffer) -> String? {
+        #if canImport(CoreImage)
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        if let data = ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [:]) {
+            return data.base64EncodedString()
+        }
+        #endif
+        return nil
+    }
     #endif
+
+    private func parseGeminiResponse(_ data: Data) throws -> RefereeResponse {
+        struct GeminiResponse: Decodable {
+            struct Candidate: Decodable {
+                struct Content: Decodable {
+                    struct Part: Decodable {
+                        let text: String?
+                    }
+                    let parts: [Part]
+                }
+                let content: Content
+            }
+            let candidates: [Candidate]
+        }
+
+        let decoder = JSONDecoder()
+        let payload = try decoder.decode(GeminiResponse.self, from: data)
+        guard let rawText = payload.candidates.first?.content.parts.compactMap({ $0.text }).first else {
+            throw DetectionError.inferenceFailed("Gemini returned no text response")
+        }
+        let jsonString = sanitizeJSONBlock(rawText)
+        guard let jsonData = jsonString.data(using: .utf8) else {
+            throw DetectionError.inferenceFailed("Unable to encode Gemini JSON")
+        }
+        do {
+            return try decoder.decode(RefereeResponse.self, from: jsonData)
+        } catch {
+            throw DetectionError.inferenceFailed("Failed to decode referee JSON: \(error.localizedDescription)")
+        }
+    }
+
+    private func sanitizeJSONBlock(_ text: String) -> String {
+        var output = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if output.hasPrefix("```") {
+            output = output.replacingOccurrences(of: "```json", with: "")
+            output = output.replacingOccurrences(of: "```", with: "")
+            output = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return output
+    }
 
     private static func locateSingleModel(in bundle: Bundle) -> URL? {
         let candidates = ["MobileVLM", "MobileVLMInt8", "VLMReferee", "OVDClassifier"]
