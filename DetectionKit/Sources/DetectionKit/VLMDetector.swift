@@ -9,6 +9,10 @@ import CoreML
 import CoreVideo
 #endif
 
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
+
 #if canImport(CoreImage)
 import CoreImage
 #endif
@@ -44,6 +48,7 @@ public actor VLMDetector: DetectionService {
     #if canImport(CoreVideo)
     private var sceneConversionBuffer: CVPixelBuffer?
     private var sceneConversionSize: (width: Int, height: Int)?
+    private var sceneEmbeddingTargetSize: (width: Int, height: Int)?
     #endif
     #endif
 
@@ -64,9 +69,19 @@ public actor VLMDetector: DetectionService {
             throw DetectionError.modelNotFound
         }
         do {
-            self.textModel = try MLModel(contentsOf: tURL)
-            self.imageModel = try MLModel(contentsOf: iURL)
+            let textModel = try MLModel(contentsOf: tURL)
+            let imageModel = try MLModel(contentsOf: iURL)
+            self.textModel = textModel
+            self.imageModel = imageModel
             self.tokenizer = CLIPTokenizer(bundle: bundle)
+            #if canImport(CoreVideo)
+            if let targetSize = VLMDetector.extractSceneEmbeddingSize(from: imageModel) {
+                self.sceneEmbeddingTargetSize = targetSize
+                await logger.log("VLMDetector: Scene embedding target size set to \(targetSize.width)x\(targetSize.height)", level: .info, category: "DetectionKit.VLMDetector")
+            } else {
+                self.sceneEmbeddingTargetSize = nil
+            }
+            #endif
         } catch {
             throw DetectionError.modelLoadFailed(error.localizedDescription)
         }
@@ -471,25 +486,35 @@ public actor VLMDetector: DetectionService {
     #if canImport(CoreVideo)
     private func prepareScenePixelBuffer(_ pixelBuffer: CVPixelBuffer) -> CVPixelBuffer? {
         let format = CVPixelBufferGetPixelFormatType(pixelBuffer)
-        if format == kCVPixelFormatType_32BGRA || format == kCVPixelFormatType_32ARGB {
+        let targetSize = sceneEmbeddingTargetSize ?? (CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer))
+        let isBGRA = (format == kCVPixelFormatType_32BGRA || format == kCVPixelFormatType_32ARGB)
+        let matchesSize = CVPixelBufferGetWidth(pixelBuffer) == targetSize.width && CVPixelBufferGetHeight(pixelBuffer) == targetSize.height
+        if isBGRA && matchesSize {
             return pixelBuffer
         }
-        return convertScenePixelBuffer(pixelBuffer)
+        return convertScenePixelBuffer(pixelBuffer, targetWidth: targetSize.width, targetHeight: targetSize.height)
     }
 
-    private func convertScenePixelBuffer(_ pixelBuffer: CVPixelBuffer) -> CVPixelBuffer? {
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        guard let destination = acquireSceneConversionBuffer(width: width, height: height) else {
+    private func convertScenePixelBuffer(_ pixelBuffer: CVPixelBuffer, targetWidth: Int, targetHeight: Int) -> CVPixelBuffer? {
+        guard let destination = acquireSceneConversionBuffer(width: targetWidth, height: targetHeight) else {
             return nil
         }
         CVPixelBufferLockBaseAddress(destination, [])
         #if canImport(CoreImage)
         let sourceImage = CIImage(cvPixelBuffer: pixelBuffer)
-        ciContext.render(sourceImage, to: destination)
-        #endif
+        let safeWidth = max(sourceImage.extent.width, 1)
+        let safeHeight = max(sourceImage.extent.height, 1)
+        let scaleX = CGFloat(targetWidth) / safeWidth
+        let scaleY = CGFloat(targetHeight) / safeHeight
+        let scaled = sourceImage.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+        let targetRect = CGRect(x: 0, y: 0, width: CGFloat(targetWidth), height: CGFloat(targetHeight))
+        ciContext.render(scaled.cropped(to: targetRect), to: destination, bounds: targetRect, colorSpace: CGColorSpaceCreateDeviceRGB())
         CVPixelBufferUnlockBaseAddress(destination, [])
         return destination
+        #else
+        CVPixelBufferUnlockBaseAddress(destination, [])
+        return nil
+        #endif
     }
 
     private func acquireSceneConversionBuffer(width: Int, height: Int) -> CVPixelBuffer? {
@@ -516,6 +541,17 @@ public actor VLMDetector: DetectionService {
         sceneConversionBuffer = buffer
         sceneConversionSize = (width, height)
         return buffer
+    }
+    
+    private static func extractSceneEmbeddingSize(from model: MLModel) -> (width: Int, height: Int)? {
+        let inputs = model.modelDescription.inputDescriptionsByName
+        guard let descriptor = inputs.first(where: { $0.value.type == .image })?.value ?? inputs.first?.value else {
+            return nil
+        }
+        if let constraint = descriptor.imageConstraint {
+            return (constraint.pixelsWide, constraint.pixelsHigh)
+        }
+        return nil
     }
     #endif
     #endif

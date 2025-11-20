@@ -46,14 +46,15 @@ public final class DetectionVM: ObservableObject {
 
     private let logger: Logger
     private let processor: DetectionProcessor
-    private let referee: VLMReferee?
-    private let refiner: ClassificationRefiner?
+    private var referee: VLMReferee?
+    private var refiner: ClassificationRefiner?
     private let errorStore: ErrorStore
     private var lastSubmissionDate: Date = .distantPast
     private var fpsWindowStart: Date?
     private var processedFrames = 0
     private var droppedFrames = 0
     private let fpsWindow: TimeInterval
+    private var auxiliaryLoadTask: Task<Void, Never>?
 
     public init(
         service: any DetectionService,
@@ -66,12 +67,11 @@ public final class DetectionVM: ObservableObject {
         self.throttleInterval = throttleInterval
         self.logger = logger
         self.processor = DetectionProcessor(service: service)
-        // Optional MobileVLM-style referee (now authoritative: relabels/drops)
-        self.referee = try? VLMReferee(cropSize: 256, acceptGate: 0.85, minKeepGate: 0.70, maxProposals: 48, geminiAPIKey: geminiAPIKey)
-        // Optional image classifier for second-stage label refinement
-        self.refiner = try? ClassificationRefiner()
+        self.referee = nil
+        self.refiner = nil
         self.fpsWindow = fpsWindow
         self.errorStore = errorStore
+        startAuxiliaryModelLoad(geminiAPIKey: geminiAPIKey)
     }
 
     public func setInputSize(_ size: CGSize) {
@@ -154,6 +154,44 @@ public final class DetectionVM: ObservableObject {
                 )
             }
         }
+    }
+
+    private func startAuxiliaryModelLoad(geminiAPIKey: String?) {
+        auxiliaryLoadTask?.cancel()
+        let logger = self.logger
+        auxiliaryLoadTask = Task(priority: .utility) { [weak self] in
+            let result = await DetectionVM.prepareAuxiliaryModels(logger: logger, geminiAPIKey: geminiAPIKey)
+            guard let self else { return }
+            self.referee = result.referee
+            self.refiner = result.refiner
+        }
+    }
+
+    nonisolated private static func prepareAuxiliaryModels(logger: Logger, geminiAPIKey: String?) async -> (referee: VLMReferee?, refiner: ClassificationRefiner?) {
+        var loadedReferee: VLMReferee?
+        var loadedRefiner: ClassificationRefiner?
+
+        do {
+            loadedReferee = try VLMReferee(
+                cropSize: 256,
+                acceptGate: 0.85,
+                minKeepGate: 0.70,
+                maxProposals: 48,
+                geminiAPIKey: geminiAPIKey
+            )
+            await logger.log("DetectionVM: Auxiliary VLM referee loaded for client-side verification", level: .info, category: "DetectionKit.DetectionVM")
+        } catch {
+            await logger.log("DetectionVM: Skipping auxiliary referee (\(error.localizedDescription))", level: .warning, category: "DetectionKit.DetectionVM")
+        }
+
+        do {
+            loadedRefiner = try ClassificationRefiner()
+            await logger.log("DetectionVM: Loaded classification refiner", level: .info, category: "DetectionKit.DetectionVM")
+        } catch {
+            await logger.log("DetectionVM: Classification refiner unavailable (\(error.localizedDescription))", level: .debug, category: "DetectionKit.DetectionVM")
+        }
+
+        return (loadedReferee, loadedRefiner)
     }
 
     public func registerFatalError(_ message: String, metadata: [String: String] = [:]) {
