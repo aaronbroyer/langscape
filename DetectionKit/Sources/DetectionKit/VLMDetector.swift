@@ -32,7 +32,15 @@ public actor VLMDetector: DetectionService {
     private var tokenizer: CLIPTokenizer?
     private var labelBank: [String] = []
     private var textEmbeddings: [[Double]] = []
+    private var contextEmbeddings: [[Double]] = []
     private let ciContext = CIContext()
+    private static let sceneContexts: [String] = [
+        "Kitchen", "Living Room", "Bedroom", "Bathroom", "Office",
+        "Classroom", "Gym", "Park", "Supermarket", "Cafe",
+        "Restaurant", "Street", "Bus Station", "Train Station", "Airport",
+        "Hospital", "Library", "Clothing Store", "Bakery", "Pharmacy"
+    ]
+    private let sceneConfidenceGate: Double = 0.25
     #endif
 
     public init(logger: Utilities.Logger = .shared, cropSize: Int = 256, acceptGate: Double = 0.85, maxProposals: Int = 64) {
@@ -92,6 +100,21 @@ public actor VLMDetector: DetectionService {
         let preparedCount = self.labelBank.count
         let failed = failedCount
         await logger.log("VLMDetector prepared: labels=\(preparedCount)/\(totalLabels) (failed: \(failed))", level: .info, category: "DetectionKit.VLMDetector")
+
+        if let tModel = textModel {
+            let ctxPairs = Self.sceneContexts.compactMap { name -> (String, [Double])? in
+                guard let emb = Self.embedText(label: name, tokenizer: tokenizer, model: tModel) else { return nil }
+                return (name, emb)
+            }
+            if ctxPairs.count == Self.sceneContexts.count {
+                self.contextEmbeddings = ctxPairs.map { $0.1 }
+                await logger.log("VLMDetector: Prepared \(ctxPairs.count) scene context embeddings", level: .info, category: "DetectionKit.VLMDetector")
+            } else {
+                await logger.log("VLMDetector: Scene embedding prep incomplete (\(ctxPairs.count))/\(Self.sceneContexts.count)", level: .warning, category: "DetectionKit.VLMDetector")
+            }
+        } else {
+            await logger.log("VLMDetector: textModel missing - cannot prepare scene embeddings", level: .warning, category: "DetectionKit.VLMDetector")
+        }
 
         // Diagnostic: Check embedding diversity by comparing first few embeddings
         if textEmbeddings.count >= 10 {
@@ -188,6 +211,36 @@ public actor VLMDetector: DetectionService {
         return []
         #endif
     }
+
+    #if canImport(CoreVideo)
+    public func classifyScene(pixelBuffer: CVPixelBuffer) async -> String {
+        #if canImport(CoreML)
+        guard prepared, let imageModel, !contextEmbeddings.isEmpty else {
+            return "General"
+        }
+        guard let vector = VLMDetector.embedImage(pixel: pixelBuffer, model: imageModel) else {
+            await logger.log("VLMDetector: Scene classification failed to embed image", level: .warning, category: "DetectionKit.VLMDetector")
+            return "General"
+        }
+        var bestIndex = 0
+        var bestScore = -Double.greatestFiniteMagnitude
+        for (idx, ctxVec) in contextEmbeddings.enumerated() {
+            let sim = VLMDetector.cosine01(vector, ctxVec)
+            if sim > bestScore {
+                bestScore = sim
+                bestIndex = idx
+            }
+        }
+        if bestScore >= sceneConfidenceGate {
+            return Self.sceneContexts[bestIndex]
+        } else {
+            return "General"
+        }
+        #else
+        return "General"
+        #endif
+    }
+    #endif
 
     #if canImport(CoreML)
     private func locateMobileCLIP(in bundle: Bundle) -> (text: URL, image: URL)? {
