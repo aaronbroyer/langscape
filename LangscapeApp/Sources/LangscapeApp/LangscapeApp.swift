@@ -9,23 +9,26 @@ struct LangscapeAppMain: App {
     @StateObject private var detectionViewModel: DetectionVM
     @StateObject private var labelScrambleViewModel: LabelScrambleVM
     @StateObject private var appSettings: AppSettings
+    @StateObject private var contextManager: ContextManager
 
     init() {
-        // Switch pipeline to VLM-first with YOLO fallback (CombinedDetector)
-        let detectionVM = DetectionVM(service: CombinedDetector())
+        let service = CombinedDetector()
+        let detectionVM = DetectionVM(service: service)
         _detectionViewModel = StateObject(wrappedValue: detectionVM)
 
         let scrambleVM = LabelScrambleVM()
         _labelScrambleViewModel = StateObject(wrappedValue: scrambleVM)
 
         _appSettings = StateObject(wrappedValue: AppSettings.shared)
+        _contextManager = StateObject(wrappedValue: ContextManager(detector: service))
     }
 
     var body: some Scene {
         WindowGroup {
             AppFlowView(
                 detectionViewModel: detectionViewModel,
-                gameViewModel: labelScrambleViewModel
+                gameViewModel: labelScrambleViewModel,
+                contextManager: contextManager
             )
             .environmentObject(appSettings)
         }
@@ -40,6 +43,7 @@ private struct AppFlowView: View {
     @EnvironmentObject private var settings: AppSettings
     @ObservedObject var detectionViewModel: DetectionVM
     @ObservedObject var gameViewModel: LabelScrambleVM
+    @ObservedObject var contextManager: ContextManager
 
     @State private var path: [Route] = []
     @StateObject private var onboardingViewModel = OnboardingViewModel()
@@ -55,7 +59,8 @@ private struct AppFlowView: View {
                 case .experience:
                     CameraPreviewView(
                         viewModel: detectionViewModel,
-                        gameViewModel: gameViewModel
+                        gameViewModel: gameViewModel,
+                        contextManager: contextManager
                     )
                     .navigationBarBackButtonHidden(true)
                     .toolbar(.hidden, for: .navigationBar)

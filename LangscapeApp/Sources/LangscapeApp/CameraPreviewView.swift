@@ -1,8 +1,8 @@
-#if canImport(SwiftUI) && canImport(AVFoundation)
+#if canImport(SwiftUI) && canImport(ARKit)
 import SwiftUI
-import AVFoundation
+import ARKit
+import RealityKit
 import DetectionKit
-import GameKitLS
 import GameKitLS
 import UIComponents
 import DesignSystem
@@ -10,11 +10,14 @@ import Utilities
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(ImageIO)
+import ImageIO
+#endif
 
 struct CameraPreviewView: View {
     @ObservedObject var viewModel: DetectionVM
     @ObservedObject var gameViewModel: LabelScrambleVM
-    @StateObject private var controller = CameraSessionController()
+    @ObservedObject var contextManager: ContextManager
 
     @State private var showCompletionFlash = false
     @State private var homeCardPressed = false
@@ -24,7 +27,7 @@ struct CameraPreviewView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
-                CameraPreviewLayer(session: controller.session)
+                ARCameraView(viewModel: viewModel, contextManager: contextManager)
                     .ignoresSafeArea()
 
                 overlays(in: proxy.size)
@@ -39,13 +42,6 @@ struct CameraPreviewView: View {
             }
             .coordinateSpace(name: "experience")
             .background(Color.black)
-            .task {
-                await controller.setViewModel(viewModel)
-                controller.startSession()
-            }
-            .onDisappear {
-                controller.stopSession()
-            }
             .onChange(of: viewModel.detections) { _, newDetections in
                 gameViewModel.ingestDetections(newDetections)
             }
@@ -57,6 +53,11 @@ struct CameraPreviewView: View {
                     gameViewModel.presentFatalError()
                 }
             }
+        }
+        .overlay(alignment: .topLeading) {
+            contextBadge
+                .padding(.top, 24)
+                .padding(.leading, 24)
         }
     }
 
@@ -94,6 +95,38 @@ struct CameraPreviewView: View {
             }
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.86), value: gameViewModel.overlay)
+    }
+
+    private var contextBadge: some View {
+        HStack(spacing: Spacing.xSmall.cgFloat) {
+            Image(systemName: "viewfinder")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.9))
+            Text(contextManager.contextDisplayName)
+                .font(Typography.caption.font.weight(.semibold))
+                .foregroundStyle(Color.white)
+                .lineLimit(1)
+
+            if contextManager.isDetecting {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                    .scaleEffect(0.8)
+            } else if contextManager.canManuallyChange {
+                Button("Change") {
+                    contextManager.reset()
+                }
+                .font(Typography.caption.font.weight(.semibold))
+                .foregroundStyle(ColorPalette.accent.swiftUIColor)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color.white.opacity(0.15), in: Capsule())
+            }
+        }
+        .padding(.horizontal, Spacing.medium.cgFloat)
+        .padding(.vertical, Spacing.xSmall.cgFloat)
+        .background(.ultraThinMaterial, in: Capsule())
+        .shadow(color: Color.black.opacity(0.35), radius: 8, x: 0, y: 4)
     }
 
     private var homeOverlay: some View {
@@ -381,169 +414,6 @@ struct CameraPreviewView: View {
     }
 }
 
-private struct CameraPreviewLayer: UIViewRepresentable {
-    let session: AVCaptureSession
-
-    func makeUIView(context: Context) -> PreviewView {
-        let view = PreviewView()
-        view.videoPreviewLayer.session = session
-        view.videoPreviewLayer.videoGravity = .resizeAspectFill
-        return view
-    }
-
-    func updateUIView(_ uiView: PreviewView, context: Context) {
-        uiView.videoPreviewLayer.session = session
-    }
-
-    final class PreviewView: UIView {
-        override static var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
-
-        var videoPreviewLayer: AVCaptureVideoPreviewLayer {
-            // swiftlint:disable:next force_cast
-            layer as! AVCaptureVideoPreviewLayer
-        }
-    }
-}
-
-private final class CameraSessionController: NSObject, ObservableObject {
-    let session = AVCaptureSession()
-
-    private let logger = Logger.shared
-    private let sessionQueue = DispatchQueue(label: "CameraSessionController.queue")
-    private let videoOutput = AVCaptureVideoDataOutput()
-    private weak var viewModel: DetectionVM?
-    private var isConfigured = false
-
-    func setViewModel(_ viewModel: DetectionVM) async {
-        self.viewModel = viewModel
-        await logger.log("Camera view model attached", level: .info, category: "LangscapeApp.Camera")
-    }
-
-    func startSession() {
-        sessionQueue.async { [weak self] in
-            guard let self else { return }
-            if !self.isConfigured {
-                self.configureSession()
-                self.isConfigured = true
-            }
-            if !self.session.isRunning {
-                self.session.startRunning()
-                Task { await self.logger.log("AVCaptureSession started", level: .info, category: "LangscapeApp.Camera") }
-            }
-        }
-    }
-
-    func stopSession() {
-        sessionQueue.async { [weak self] in
-            guard let self, self.session.isRunning else { return }
-            self.session.stopRunning()
-            Task { await self.logger.log("AVCaptureSession stopped", level: .info, category: "LangscapeApp.Camera") }
-        }
-    }
-
-    private func configureSession() {
-        session.beginConfiguration()
-        session.sessionPreset = .high
-
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-            Task { await logger.log("No camera device available", level: .error, category: "LangscapeApp.Camera") }
-            Task { @MainActor [weak self] in
-                self?.viewModel?.registerFatalError(
-                    "Camera hardware unavailable.",
-                    metadata: ["stage": "camera_device"]
-                )
-            }
-            session.commitConfiguration()
-            return
-        }
-
-        do {
-            let input = try AVCaptureDeviceInput(device: device)
-            if session.canAddInput(input) {
-                session.addInput(input)
-            }
-        } catch {
-            Task { await logger.log("Failed to create camera input: \(error.localizedDescription)", level: .error, category: "LangscapeApp.Camera") }
-            Task { @MainActor [weak self] in
-                self?.viewModel?.registerFatalError(
-                    "Failed to create camera input.",
-                    metadata: [
-                        "stage": "camera_input",
-                        "error": error.localizedDescription
-                    ]
-                )
-            }
-        }
-
-        videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-        videoOutput.alwaysDiscardsLateVideoFrames = true
-
-        if session.canAddOutput(videoOutput) {
-            session.addOutput(videoOutput)
-        } else {
-            Task { await logger.log("Unable to add video output to session", level: .error, category: "LangscapeApp.Camera") }
-            Task { @MainActor [weak self] in
-                self?.viewModel?.registerFatalError(
-                    "Camera output configuration failed.",
-                    metadata: ["stage": "camera_output"]
-                )
-            }
-        }
-
-        videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)
-        session.commitConfiguration()
-
-        Task { await logger.log("Camera session configured", level: .info, category: "LangscapeApp.Camera") }
-    }
-}
-
-extension CameraSessionController: AVCaptureVideoDataOutputSampleBufferDelegate {
-    nonisolated func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        #if canImport(ImageIO)
-        let cgOrientationRaw: UInt32 = {
-            if #available(iOS 17.0, *) {
-                // Map rotation angle to CGImagePropertyOrientation
-                let angle = Int(connection.videoRotationAngle) % 360
-                switch angle {
-                case 0: return CGImagePropertyOrientation.up.rawValue
-                case 90: return CGImagePropertyOrientation.right.rawValue
-                case 180: return CGImagePropertyOrientation.down.rawValue
-                case 270: return CGImagePropertyOrientation.left.rawValue
-                default: return CGImagePropertyOrientation.up.rawValue
-                }
-            } else {
-                // Map AVCaptureVideoOrientation (back camera) to CGImagePropertyOrientation
-                switch connection.videoOrientation {
-                case .portrait: return CGImagePropertyOrientation.right.rawValue
-                case .portraitUpsideDown: return CGImagePropertyOrientation.left.rawValue
-                case .landscapeRight: return CGImagePropertyOrientation.up.rawValue
-                case .landscapeLeft: return CGImagePropertyOrientation.down.rawValue
-                @unknown default: return CGImagePropertyOrientation.up.rawValue
-                }
-            }
-        }()
-        #else
-        let cgOrientationRaw: UInt32? = nil
-        #endif
-        let request = DetectionRequest(timestamp: Date(), pixelBuffer: pixelBuffer, imageOrientationRaw: cgOrientationRaw)
-        Task { @MainActor [weak self] in
-            let pbw = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
-            let pbh = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-            // Use oriented input dimensions to match Vision's coordinate space
-            let orientedSize: CGSize
-            switch connection.videoOrientation {
-            case .portrait, .portraitUpsideDown:
-                orientedSize = CGSize(width: pbh, height: pbw)
-            default:
-                orientedSize = CGSize(width: pbw, height: pbh)
-            }
-            self?.viewModel?.setInputSize(orientedSize)
-            self?.viewModel?.enqueue(request)
-        }
-    }
-}
-
 private struct RoundPlayLayer: View {
     let round: Round
     let placedLabels: Set<GameKitLS.Label.ID>
@@ -809,6 +679,83 @@ private extension CameraPreviewView {
             return CGRect(x: x, y: y, width: w, height: h)
         }
         return normalizedRect.rect(in: viewSize)
+    }
+}
+
+private struct ARCameraView: UIViewRepresentable {
+    let viewModel: DetectionVM
+    let contextManager: ContextManager
+
+    func makeCoordinator() -> ARSessionCoordinator {
+        ARSessionCoordinator(viewModel: viewModel, contextManager: contextManager)
+    }
+
+    func makeUIView(context: Context) -> ARView {
+        let view = ARView(frame: .zero)
+        view.automaticallyConfigureSession = false
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: ARView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: ARView, coordinator: ARSessionCoordinator) {
+        uiView.session.pause()
+    }
+}
+
+private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
+    private let viewModel: DetectionVM
+    private let contextManager: ContextManager
+    private var lastFrameTime: TimeInterval = 0
+    private let logger = Logger.shared
+
+    init(viewModel: DetectionVM, contextManager: ContextManager) {
+        self.viewModel = viewModel
+        self.contextManager = contextManager
+    }
+
+    func attach(to arView: ARView) {
+        arView.session.delegate = self
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.planeDetection = [.horizontal, .vertical]
+        arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        Task { await logger.log("AR session configured", level: .info, category: "LangscapeApp.Camera") }
+    }
+
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        let now = Date().timeIntervalSince1970
+        guard now - lastFrameTime >= 0.25 else { return }
+        lastFrameTime = now
+
+        if contextManager.shouldClassifyScene {
+            Task { await contextManager.classify(frame.capturedImage) }
+        }
+
+        #if canImport(ImageIO)
+        let orientationRaw = CGImagePropertyOrientation.right.rawValue
+        #else
+        let orientationRaw: UInt32? = nil
+        #endif
+        let request = DetectionRequest(pixelBuffer: frame.capturedImage, imageOrientationRaw: orientationRaw)
+        Task { @MainActor in
+            let width = CGFloat(CVPixelBufferGetWidth(frame.capturedImage))
+            let height = CGFloat(CVPixelBufferGetHeight(frame.capturedImage))
+            viewModel.setInputSize(CGSize(width: width, height: height))
+            viewModel.enqueue(request)
+        }
+    }
+
+    func session(_ session: ARSession, didFailWithError error: Error) {
+        Task { await logger.log("AR session failed: \(error.localizedDescription)", level: .error, category: "LangscapeApp.Camera") }
+    }
+
+    func sessionWasInterrupted(_ session: ARSession) {
+        Task { await logger.log("AR session interrupted", level: .warning, category: "LangscapeApp.Camera") }
+    }
+
+    func sessionInterruptionEnded(_ session: ARSession) {
+        Task { await logger.log("AR session interruption ended", level: .info, category: "LangscapeApp.Camera") }
     }
 }
 #endif
