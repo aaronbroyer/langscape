@@ -26,8 +26,8 @@ final class ContextManager: ObservableObject {
     }
 
     var shouldClassifyScene: Bool {
-        if case .unknown = state { return true }
-        return false
+        if case .locked = state { return false }
+        return true
     }
 
     var contextDisplayName: String {

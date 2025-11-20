@@ -60,13 +60,14 @@ public final class DetectionVM: ObservableObject {
         throttleInterval: TimeInterval = 0.06,
         fpsWindow: TimeInterval = 1,
         logger: Logger = .shared,
-        errorStore: ErrorStore = .shared
+        errorStore: ErrorStore = .shared,
+        geminiAPIKey: String? = nil
     ) {
         self.throttleInterval = throttleInterval
         self.logger = logger
         self.processor = DetectionProcessor(service: service)
         // Optional MobileVLM-style referee (now authoritative: relabels/drops)
-        self.referee = try? VLMReferee(cropSize: 256, acceptGate: 0.85, minKeepGate: 0.70, maxProposals: 48)
+        self.referee = try? VLMReferee(cropSize: 256, acceptGate: 0.85, minKeepGate: 0.70, maxProposals: 48, geminiAPIKey: geminiAPIKey)
         // Optional image classifier for second-stage label refinement
         self.refiner = try? ClassificationRefiner()
         self.fpsWindow = fpsWindow

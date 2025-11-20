@@ -15,7 +15,7 @@ public actor CombinedDetector: DetectionService {
     private var yoloReady = false
     private var refereeReady = false
 
-    public init(logger: Utilities.Logger = .shared) {
+    public init(logger: Utilities.Logger = .shared, geminiAPIKey: String? = nil) {
         self.logger = logger
         // YOLO-FIRST ARCHITECTURE: Fast, proven, object-aware detection
         // YOLO is the primary detector with high recall settings
@@ -27,7 +27,7 @@ public actor CombinedDetector: DetectionService {
         // acceptGate 0.75 for reliable verification
         // Higher gate prevents false positives from corrupted embeddings
         do {
-            let r = try VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.75, minKeepGate: 0.50, maxProposals: 64)
+            let r = try VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.75, minKeepGate: 0.50, maxProposals: 64, geminiAPIKey: geminiAPIKey)
             self.referee = r
             self.refereeReady = true
         } catch {
@@ -74,6 +74,18 @@ public actor CombinedDetector: DetectionService {
         }
 
         await logger.log("CombinedDetector: Prepare complete - YOLO: ✅, VLM Referee: \(refereeStatus ? "✅" : "⚠️ disabled")", level: .info, category: "DetectionKit.CombinedDetector")
+    }
+
+    public func loadContext(_ contextName: String) async -> Bool {
+        await logger.log("CombinedDetector: Loading context '\(contextName)'", level: .info, category: "DetectionKit.CombinedDetector")
+        do {
+            try await yolo.loadContext(contextName)
+            yoloReady = true
+            return true
+        } catch {
+            await logger.log("CombinedDetector: Failed to load context '\(contextName)': \(error.localizedDescription)", level: .error, category: "DetectionKit.CombinedDetector")
+            return false
+        }
     }
 
     public func loadContext(_ contextName: String) async -> Bool {

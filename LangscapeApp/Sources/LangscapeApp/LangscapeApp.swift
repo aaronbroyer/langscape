@@ -12,8 +12,8 @@ struct LangscapeAppMain: App {
     @StateObject private var contextManager: ContextManager
 
     init() {
-        let service = CombinedDetector()
-        let detectionVM = DetectionVM(service: service)
+        let service = CombinedDetector(geminiAPIKey: Secrets.geminiAPIKey)
+        let detectionVM = DetectionVM(service: service, geminiAPIKey: Secrets.geminiAPIKey)
         _detectionViewModel = StateObject(wrappedValue: detectionVM)
 
         let scrambleVM = LabelScrambleVM()
