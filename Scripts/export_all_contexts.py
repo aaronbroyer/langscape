@@ -7,8 +7,38 @@ INT8 CoreML package with NMS enabled.
 """
 
 from pathlib import Path
+import shutil
+from typing import Iterable, Optional, Union
 
 from ultralytics import YOLOWorld
+
+
+def resolve_export_path(result: Union[str, Path, Iterable, None]) -> Optional[Path]:
+    """
+    Normalize the exporter return value (string/tuple/dict) and locate the Core ML package.
+    """
+
+    if result is None:
+        return None
+
+    if isinstance(result, (str, Path)):
+        candidates = [result]
+    elif isinstance(result, dict):
+        candidates = result.values()
+    elif isinstance(result, Iterable):
+        candidates = result
+    else:
+        return None
+
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.suffix == ".mlpackage" and path.exists():
+            return path
+        if path.is_dir():
+            pkg = next(path.glob("*.mlpackage"), None)
+            if pkg:
+                return pkg
+    return None
 
 
 def main() -> None:
@@ -1065,6 +1095,10 @@ def main() -> None:
         print(f"Exporting context: {context_name} ({len(vocabulary)} words)...")
         model.set_classes(vocabulary)
         filename = f"yolo_world_{context_name.lower().replace(' ', '_')}"
+        target_path = output_dir / f"{filename}.mlpackage"
+        if target_path.exists():
+            print(f"⏭️  Skipping {context_name} (already exported)")
+            continue
         result = model.export(
             format="coreml",
             int8=True,
@@ -1072,10 +1106,16 @@ def main() -> None:
             project=str(output_dir),
             name=filename,
         )
-        if result:
-            print(f"✅ Successfully exported {context_name}")
-        else:
+        exported_path = resolve_export_path(result)
+        if not exported_path or not exported_path.exists():
             print(f"❌ Failed to export {context_name}")
+            continue
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if target_path.exists():
+            target_path.unlink()
+        shutil.move(str(exported_path), target_path)
+        print(f"✅ Saved {context_name} → {target_path.relative_to(output_dir)}")
 
     print("🎉 All contexts exported!")
 
