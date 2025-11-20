@@ -554,10 +554,22 @@ public struct VLMReferee: @unchecked Sendable {
     private static func locateMobileCLIP(in bundle: Bundle, variant: String) -> (text: URL, image: URL)? {
         let txtName = "mobileclip_\(variant)_text"
         let imgName = "mobileclip_\(variant)_image"
+
+        if let txt = bundle.url(forResource: txtName, withExtension: "mlmodelc"),
+           let img = bundle.url(forResource: imgName, withExtension: "mlmodelc") {
+            return (txt, img)
+        }
+
         if let txt = bundle.url(forResource: txtName, withExtension: "mlpackage"),
            let img = bundle.url(forResource: imgName, withExtension: "mlpackage") {
             return (txt, img)
         }
+
+        #if DEBUG
+        if let resourcePath = bundle.resourcePath {
+            print("VLMReferee: MobileCLIP variant \(variant) not found in bundle resources at \(resourcePath)")
+        }
+        #endif
         return nil
     }
 

@@ -40,7 +40,11 @@ public actor VLMDetector: DetectionService {
         "Restaurant", "Street", "Bus Station", "Train Station", "Airport",
         "Hospital", "Library", "Clothing Store", "Bakery", "Pharmacy"
     ]
-    private let sceneConfidenceGate: Double = 0.25
+    private let sceneConfidenceGate: Double = 0.10
+    #if canImport(CoreVideo)
+    private var sceneConversionBuffer: CVPixelBuffer?
+    private var sceneConversionSize: (width: Int, height: Int)?
+    #endif
     #endif
 
     public init(logger: Utilities.Logger = .shared, cropSize: Int = 256, acceptGate: Double = 0.85, maxProposals: Int = 64) {
@@ -218,7 +222,11 @@ public actor VLMDetector: DetectionService {
         guard prepared, let imageModel, !contextEmbeddings.isEmpty else {
             return "General"
         }
-        guard let vector = VLMDetector.embedImage(pixel: pixelBuffer, model: imageModel) else {
+        guard let sceneReadyBuffer = prepareScenePixelBuffer(pixelBuffer) else {
+            await logger.log("VLMDetector: Scene classification failed to prepare BGRA buffer", level: .error, category: "DetectionKit.VLMDetector")
+            return "General"
+        }
+        guard let vector = VLMDetector.embedImage(pixel: sceneReadyBuffer, model: imageModel) else {
             await logger.log("VLMDetector: Scene classification failed to embed image", level: .warning, category: "DetectionKit.VLMDetector")
             return "General"
         }
@@ -231,9 +239,16 @@ public actor VLMDetector: DetectionService {
                 bestIndex = idx
             }
         }
+        let chosenContext = Self.sceneContexts[bestIndex]
+        let confidencePercent = String(format: "%.2f", bestScore)
         if bestScore >= sceneConfidenceGate {
-            return Self.sceneContexts[bestIndex]
+            return chosenContext
         } else {
+            await logger.log(
+                "Scene classifier low confidence for \(chosenContext) (score=\(confidencePercent))",
+                level: .debug,
+                category: "DetectionKit.VLMDetector"
+            )
             return "General"
         }
         #else
@@ -452,5 +467,56 @@ public actor VLMDetector: DetectionService {
         let uni = max(areaA + areaB - inter, 1e-9)
         return inter / uni
     }
+
+    #if canImport(CoreVideo)
+    private func prepareScenePixelBuffer(_ pixelBuffer: CVPixelBuffer) -> CVPixelBuffer? {
+        let format = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        if format == kCVPixelFormatType_32BGRA || format == kCVPixelFormatType_32ARGB {
+            return pixelBuffer
+        }
+        return convertScenePixelBuffer(pixelBuffer)
+    }
+
+    private func convertScenePixelBuffer(_ pixelBuffer: CVPixelBuffer) -> CVPixelBuffer? {
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard let destination = acquireSceneConversionBuffer(width: width, height: height) else {
+            return nil
+        }
+        CVPixelBufferLockBaseAddress(destination, [])
+        #if canImport(CoreImage)
+        let sourceImage = CIImage(cvPixelBuffer: pixelBuffer)
+        ciContext.render(sourceImage, to: destination)
+        #endif
+        CVPixelBufferUnlockBaseAddress(destination, [])
+        return destination
+    }
+
+    private func acquireSceneConversionBuffer(width: Int, height: Int) -> CVPixelBuffer? {
+        if let size = sceneConversionSize,
+           let buffer = sceneConversionBuffer,
+           size.width == width,
+           size.height == height {
+            return buffer
+        }
+
+        var pixelBuffer: CVPixelBuffer?
+        let attrs: [CFString: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true
+        ]
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pixelBuffer)
+        guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
+            Task {
+                await logger.log("VLMDetector: Failed to create BGRA buffer for scene classification (status=\(status))", level: .error, category: "DetectionKit.VLMDetector")
+            }
+            return nil
+        }
+        sceneConversionBuffer = buffer
+        sceneConversionSize = (width, height)
+        return buffer
+    }
+    #endif
     #endif
 }

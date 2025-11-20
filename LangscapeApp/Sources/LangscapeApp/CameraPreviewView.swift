@@ -730,22 +730,25 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         guard now - lastFrameTime >= 0.25 else { return }
         lastFrameTime = now
 
-        Task { @MainActor [contextManager] in
-            if contextManager.shouldClassifyScene {
-                await contextManager.classify(frame.capturedImage)
-            }
-        }
-
+        let pixelBuffer = frame.capturedImage
         #if canImport(ImageIO)
         let orientationRaw = CGImagePropertyOrientation.right.rawValue
         #else
         let orientationRaw: UInt32? = nil
         #endif
-        let request = DetectionRequest(pixelBuffer: frame.capturedImage, imageOrientationRaw: orientationRaw)
+        let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+        let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+        let inputSize = CGSize(width: width, height: height)
+        let request = DetectionRequest(pixelBuffer: pixelBuffer, imageOrientationRaw: orientationRaw)
+
+        Task { @MainActor [contextManager] in
+            if contextManager.shouldClassifyScene {
+                await contextManager.classify(pixelBuffer)
+            }
+        }
+
         Task { @MainActor in
-            let width = CGFloat(CVPixelBufferGetWidth(frame.capturedImage))
-            let height = CGFloat(CVPixelBufferGetHeight(frame.capturedImage))
-            viewModel.setInputSize(CGSize(width: width, height: height))
+            viewModel.setInputSize(inputSize)
             viewModel.enqueue(request)
         }
     }
@@ -785,8 +788,8 @@ final class ContextManager: ObservableObject {
     }
 
     var shouldClassifyScene: Bool {
-        if case .locked = state { return false }
-        return true
+        if case .unknown = state { return true }
+        return false
     }
 
     var contextDisplayName: String {
@@ -824,7 +827,12 @@ final class ContextManager: ObservableObject {
                 classifierPrepared = true
             }
             let sensed = await sceneClassifier.classifyScene(pixelBuffer: pixelBuffer)
-            let normalized = sensed.isEmpty ? "general" : sensed
+            let normalized = sensed.isEmpty ? "General" : sensed
+            if normalized.caseInsensitiveCompare("general") == .orderedSame {
+                state = .unknown
+                await logger.log("Context classification inconclusive", level: .debug, category: "LangscapeApp.Context")
+                return
+            }
             let loaded = await detector.loadContext(normalized)
             if loaded {
                 state = .locked(normalized)
