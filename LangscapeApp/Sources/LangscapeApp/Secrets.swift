@@ -1,4 +1,3 @@
-#if canImport(Foundation)
 import Foundation
 
 enum Secrets {
@@ -6,4 +5,3 @@ enum Secrets {
     /// TODO: Move into a secure storage mechanism before shipping.
     static let geminiAPIKey = "AIzaSyBqRvJljtywmDqm-UCIs-vXahPScp6wpo8"
 }
-#endif
