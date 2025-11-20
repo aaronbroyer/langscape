@@ -4,6 +4,10 @@ import DetectionKit
 import GameKitLS
 import Utilities
 
+private enum Secrets {
+    static let geminiAPIKey = "AIzaSyBqRvJljtywmDqm-UCIs-vXahPScp6wpo8"
+}
+
 @main
 struct LangscapeAppMain: App {
     @StateObject private var detectionViewModel: DetectionVM
