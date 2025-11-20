@@ -1,4 +1,4 @@
-#if canImport(SwiftUI) && canImport(CoreVideo)
+#if canImport(SwiftUI)
 import SwiftUI
 import CoreVideo
 import DetectionKit

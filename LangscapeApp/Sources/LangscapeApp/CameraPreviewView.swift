@@ -14,6 +14,8 @@ import UIKit
 import ImageIO
 #endif
 
+private typealias DetectionRect = DetectionKit.NormalizedRect
+
 struct CameraPreviewView: View {
     @ObservedObject var viewModel: DetectionVM
     @ObservedObject var gameViewModel: LabelScrambleVM
@@ -642,7 +644,7 @@ private struct HomeActivityCard: View {
     }
 }
 
-private extension NormalizedRect {
+private extension DetectionRect {
     func rect(in size: CGSize) -> CGRect {
         let width = CGFloat(self.size.width) * size.width
         let height = CGFloat(self.size.height) * size.height
@@ -661,7 +663,7 @@ private extension CameraPreviewView {
         frame(for: object.boundingBox, in: viewSize)
     }
 
-    func frame(for normalizedRect: NormalizedRect, in viewSize: CGSize) -> CGRect {
+    func frame(for normalizedRect: DetectionRect, in viewSize: CGSize) -> CGRect {
         if let imgSize = viewModel.inputImageSize, imgSize.width > 0, imgSize.height > 0 {
             let sw = viewSize.width
             let sh = viewSize.height

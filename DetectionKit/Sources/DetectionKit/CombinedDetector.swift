@@ -88,18 +88,6 @@ public actor CombinedDetector: DetectionService {
         }
     }
 
-    public func loadContext(_ contextName: String) async -> Bool {
-        await logger.log("CombinedDetector: Loading context '\(contextName)'", level: .info, category: "DetectionKit.CombinedDetector")
-        do {
-            try await yolo.loadContext(contextName)
-            yoloReady = true
-            return true
-        } catch {
-            await logger.log("CombinedDetector: Context '\(contextName)' failed to load: \(error.localizedDescription)", level: .error, category: "DetectionKit.CombinedDetector")
-            return false
-        }
-    }
-
     public func detect(on request: DetectionRequest) async throws -> [Detection] {
         guard yoloReady else {
             throw DetectionError.notPrepared
