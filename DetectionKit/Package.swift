@@ -14,13 +14,15 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(path: "../Utilities")
+        .package(path: "../Utilities"),
+        .package(path: "../SegmentationKit")
     ],
     targets: [
         .target(
             name: "DetectionKit",
             dependencies: [
-                "Utilities"
+                "Utilities",
+                "SegmentationKit"
             ],
             resources: [
                 // YOLO model (OVD student)

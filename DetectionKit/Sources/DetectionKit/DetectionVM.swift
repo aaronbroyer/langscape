@@ -14,8 +14,16 @@ public struct CGSize: Equatable, Sendable {
 #endif
 import Utilities
 
+#if canImport(CoreImage)
+import CoreImage
+#endif
+
 #if canImport(CoreVideo)
 import CoreVideo
+#endif
+
+#if canImport(SegmentationKit)
+import SegmentationKit
 #endif
 
 #if canImport(Combine)
@@ -41,6 +49,9 @@ public final class DetectionVM: ObservableObject {
     @Published public private(set) var fps: Double = 0
     @Published public private(set) var lastError: DetectionError?
     @Published public private(set) var inputImageSize: CGSize?
+#if canImport(CoreImage)
+    @Published public private(set) var segmentationMasks: [UUID: CIImage] = [:]
+#endif
 
     public let throttleInterval: TimeInterval
 
@@ -55,6 +66,11 @@ public final class DetectionVM: ObservableObject {
     private var droppedFrames = 0
     private let fpsWindow: TimeInterval
     private var auxiliaryLoadTask: Task<Void, Never>?
+#if canImport(SegmentationKit) && canImport(CoreVideo)
+    private let segmentationService: SegmentationService?
+    private var pendingSegmentationDetections: Set<UUID> = []
+    private let segmentationConfidenceGate: Double = 0.85
+#endif
 
     public init(
         service: any DetectionService,
@@ -62,7 +78,8 @@ public final class DetectionVM: ObservableObject {
         fpsWindow: TimeInterval = 1,
         logger: Logger = .shared,
         errorStore: ErrorStore = .shared,
-        geminiAPIKey: String? = nil
+        geminiAPIKey: String? = nil,
+        segmentationService: SegmentationService? = SegmentationService.shared
     ) {
         self.throttleInterval = throttleInterval
         self.logger = logger
@@ -71,6 +88,9 @@ public final class DetectionVM: ObservableObject {
         self.refiner = nil
         self.fpsWindow = fpsWindow
         self.errorStore = errorStore
+#if canImport(SegmentationKit) && canImport(CoreVideo)
+        self.segmentationService = segmentationService
+#endif
         startAuxiliaryModelLoad(geminiAPIKey: geminiAPIKey)
     }
 
@@ -114,6 +134,13 @@ public final class DetectionVM: ObservableObject {
                     let pb: CVPixelBuffer = request.pixelBuffer
                     detections = refiner.refine(detections, pixelBuffer: pb, orientationRaw: request.imageOrientationRaw)
                 }
+                #if canImport(SegmentationKit) && canImport(CoreVideo)
+                await viewModel.evaluateSegmentationTriggers(
+                    detections,
+                    pixelBuffer: request.pixelBuffer,
+                    timestamp: request.timestamp
+                )
+                #endif
                 #endif
                 let countForLog = detections.count
                 let labelsForLog = detections.map { "\($0.label)(\(Int($0.confidence*100))%)" }.joined(separator: ", ")
@@ -200,6 +227,52 @@ public final class DetectionVM: ObservableObject {
         Task { await logger.log(message, level: .error, category: "DetectionKit.Fatal") }
         Task { await errorStore.add(LoggedError(message: message, metadata: combined)) }
     }
+
+#if canImport(SegmentationKit) && canImport(CoreVideo)
+    @MainActor
+    private func evaluateSegmentationTriggers(_ detections: [Detection], pixelBuffer: CVPixelBuffer, timestamp: Date) {
+        guard let service = segmentationService else { return }
+        guard let candidate = detections.first(where: { $0.confidence >= segmentationConfidenceGate }) else { return }
+        if pendingSegmentationDetections.contains(candidate.id) { return }
+        pendingSegmentationDetections.insert(candidate.id)
+
+        let prompt = promptRect(for: candidate.boundingBox, pixelBuffer: pixelBuffer)
+        let request = SegmentationRequest(pixelBuffer: pixelBuffer, prompt: prompt, timestamp: timestamp.timeIntervalSince1970)
+        let detectionID = candidate.id
+        let detectionLabel = candidate.label
+
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            do {
+                let mask = try await service.segment(request)
+                await MainActor.run {
+                    #if canImport(CoreImage)
+                    self.segmentationMasks[detectionID] = mask
+                    #endif
+                    self.pendingSegmentationDetections.remove(detectionID)
+                }
+                await self.logger.log("Segmentation mask ready for \(detectionLabel)", level: .info, category: "DetectionKit.DetectionVM")
+            } catch {
+                await MainActor.run {
+                    self.pendingSegmentationDetections.remove(detectionID)
+                }
+                await self.logger.log("Segmentation failed for \(detectionLabel): \(error.localizedDescription)", level: .warning, category: "DetectionKit.DetectionVM")
+            }
+        }
+    }
+#endif
+
+#if canImport(CoreVideo)
+    private func promptRect(for boundingBox: NormalizedRect, pixelBuffer: CVPixelBuffer) -> CGRect {
+        let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+        let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+        let x = CGFloat(boundingBox.origin.x) * width
+        let y = CGFloat(boundingBox.origin.y) * height
+        let w = CGFloat(boundingBox.size.width) * width
+        let h = CGFloat(boundingBox.size.height) * height
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+#endif
 
     private func registerFrame(timestamp: Date) {
         if fpsWindowStart == nil {
