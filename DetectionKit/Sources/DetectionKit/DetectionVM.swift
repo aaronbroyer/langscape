@@ -82,9 +82,11 @@ public final class DetectionVM: ObservableObject {
     private var segmentationDisabled = false
     private let segmentationFailureLimit = 3
     private let segmentationFailureBackoff: TimeInterval = 10
-    private var segmentedObjectIDs: Set<UUID> = []
     private var segmentationPrepared = false
     private var segmentationPrepareTask: Task<Void, Never>?
+    private var maskMetadata: [UUID: SegmentationMaskMetadata] = [:]
+    private let maskRefreshIoUThreshold: Double = 0.75
+    private let maskRefreshInterval: TimeInterval = 1.5
 #endif
     private let maxInFlightRequests = 3
     private var inFlightRequests = 0
@@ -270,10 +272,6 @@ public final class DetectionVM: ObservableObject {
 
 #if canImport(SegmentationKit) && canImport(CoreVideo)
     public func requestSegmentation(for detectionID: UUID) {
-        guard !segmentedObjectIDs.contains(detectionID) else {
-            Task { await logger.log("Segmentation already completed for \(detectionID), ignoring request.", level: .debug, category: "DetectionKit.DetectionVM") }
-            return
-        }
         userRequestedSegmentationIDs.insert(detectionID)
         let label = detections.first(where: { $0.id == detectionID })?.label ?? "unknown"
         Task { await logger.log("Segmentation manually requested for \(label) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM") }
@@ -381,34 +379,78 @@ public final class DetectionVM: ObservableObject {
         }
         if segmentationDisabled { return }
         if let suspendUntil = segmentationSuspendUntil, Date() < suspendUntil { return }
-        let candidate: Detection?
-        if let manual = detections.first(where: { userRequestedSegmentationIDs.contains($0.id) }) {
-            candidate = manual
-        } else if automaticSegmentationEnabled {
-            candidate = detections.first(where: {
-                $0.confidence >= segmentationConfidenceGate && boundingBoxArea($0.boundingBox) <= segmentationAreaGate
-            })
-        } else {
-            candidate = nil
-        }
-        if candidate == nil, !userRequestedSegmentationIDs.isEmpty {
-            let activeIDs = Set(detections.map(\.id))
-            let staleRequests = userRequestedSegmentationIDs.subtracting(activeIDs)
+
+        let availableIDs = Set(detections.map(\.id))
+        if !userRequestedSegmentationIDs.isEmpty {
+            let staleRequests = userRequestedSegmentationIDs.subtracting(availableIDs)
             if !staleRequests.isEmpty {
                 userRequestedSegmentationIDs.subtract(staleRequests)
                 Task { await logger.log("Segmentation: cleared \(staleRequests.count) stale requests", level: .debug, category: "DetectionKit.DetectionVM") }
             }
         }
-        guard let target = candidate, !segmentedObjectIDs.contains(target.id) else { return }
-        if pendingSegmentationDetections.contains(target.id) { return }
-        let wasUserRequested = userRequestedSegmentationIDs.contains(target.id)
-        if wasUserRequested {
-            userRequestedSegmentationIDs.remove(target.id)
-        }
-        pendingSegmentationDetections.insert(target.id)
+        maskMetadata = maskMetadata.filter { availableIDs.contains($0.key) }
 
-        let reason = wasUserRequested ? "manual" : "automatic"
-        let prompt = promptRect(for: target.boundingBox, pixelBuffer: pixelBuffer)
+        let manualDetections = detections.filter { userRequestedSegmentationIDs.contains($0.id) }
+        if let manualTarget = nextSegmentationCandidate(from: manualDetections, timestamp: timestamp, allowLargeTargets: true) {
+            userRequestedSegmentationIDs.remove(manualTarget.id)
+            scheduleSegmentation(for: manualTarget, reason: "manual", pixelBuffer: pixelBuffer, timestamp: timestamp, service: service)
+            return
+        }
+
+        guard automaticSegmentationEnabled else { return }
+        let autoEligible = detections.filter {
+            $0.confidence >= segmentationConfidenceGate &&
+            boundingBoxArea($0.boundingBox) <= segmentationAreaGate
+        }
+        if let autoTarget = nextSegmentationCandidate(from: autoEligible, timestamp: timestamp, allowLargeTargets: false) {
+            scheduleSegmentation(for: autoTarget, reason: "automatic", pixelBuffer: pixelBuffer, timestamp: timestamp, service: service)
+        }
+    }
+
+    private func nextSegmentationCandidate(
+        from detections: [Detection],
+        timestamp: Date,
+        allowLargeTargets: Bool
+    ) -> Detection? {
+        for detection in detections {
+            guard !pendingSegmentationDetections.contains(detection.id) else { continue }
+            if !allowLargeTargets {
+                guard detection.confidence >= segmentationConfidenceGate else { continue }
+                guard boundingBoxArea(detection.boundingBox) <= segmentationAreaGate else { continue }
+            }
+            guard shouldRequestMask(for: detection, timestamp: timestamp) else { continue }
+            return detection
+        }
+        return nil
+    }
+
+    private func shouldRequestMask(for detection: Detection, timestamp: Date) -> Bool {
+        let id = detection.id
+        if pendingSegmentationDetections.contains(id) { return false }
+#if canImport(CoreImage)
+        let hasMask = segmentationMasks[id] != nil
+#else
+        let hasMask = false
+#endif
+        guard let metadata = maskMetadata[id] else {
+            return true
+        }
+        if !hasMask {
+            return true
+        }
+        let moved = trackIoU(metadata.lastBoundingBox, detection.boundingBox) < maskRefreshIoUThreshold
+        let stale = timestamp.timeIntervalSince(metadata.lastRequest) >= maskRefreshInterval
+        return moved || stale
+    }
+
+    private func scheduleSegmentation(
+        for detection: Detection,
+        reason: String,
+        pixelBuffer: CVPixelBuffer,
+        timestamp: Date,
+        service: SegmentationService
+    ) {
+        let prompt = promptRect(for: detection.boundingBox, pixelBuffer: pixelBuffer)
         let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
         let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
         let request = SegmentationRequest(
@@ -417,13 +459,14 @@ public final class DetectionVM: ObservableObject {
             imageSize: CGSize(width: width, height: height),
             timestamp: timestamp.timeIntervalSince1970
         )
-        let detectionID = target.id
-        let detectionLabel = target.label
+        let detectionID = detection.id
+        maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: detection.boundingBox, lastRequest: timestamp)
+        pendingSegmentationDetections.insert(detectionID)
 
         Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
-                await self.logger.log("Segmentation starting for \(detectionLabel) (\(reason)) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
+                await self.logger.log("Segmentation starting for \(detection.label) (\(reason)) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
                 let mask = try await service.segment(request)
                 await MainActor.run {
 #if canImport(CoreImage)
@@ -432,14 +475,14 @@ public final class DetectionVM: ObservableObject {
                     self.pendingSegmentationDetections.remove(detectionID)
                     self.segmentationFailureCount = 0
                     self.segmentationSuspendUntil = nil
-                    self.segmentedObjectIDs.insert(detectionID)
+                    self.maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: detection.boundingBox, lastRequest: timestamp)
                 }
-                await self.logger.log("Segmentation mask ready for \(detectionLabel)", level: .info, category: "DetectionKit.DetectionVM")
+                await self.logger.log("Segmentation mask ready for \(detection.label)", level: .info, category: "DetectionKit.DetectionVM")
             } catch {
                 _ = await MainActor.run {
                     self.pendingSegmentationDetections.remove(detectionID)
                 }
-                await self.handleSegmentationFailure(error, label: detectionLabel)
+                await self.handleSegmentationFailure(error, label: detection.label)
             }
         }
     }
@@ -477,6 +520,20 @@ public final class DetectionVM: ObservableObject {
         let clampedHeight = max(0, min(1, rect.size.height))
         return clampedWidth * clampedHeight
     }
+
+    private func trackIoU(_ a: NormalizedRect, _ b: NormalizedRect) -> Double {
+        let ax2 = a.origin.x + a.size.width
+        let ay2 = a.origin.y + a.size.height
+        let bx2 = b.origin.x + b.size.width
+        let by2 = b.origin.y + b.size.height
+        let ix = max(0, min(ax2, bx2) - max(a.origin.x, b.origin.x))
+        let iy = max(0, min(ay2, by2) - max(a.origin.y, b.origin.y))
+        let inter = ix * iy
+        let areaA = a.size.width * a.size.height
+        let areaB = b.size.width * b.size.height
+        let uni = max(areaA + areaB - inter, 1e-9)
+        return inter / uni
+    }
 #endif
 
     private func finishInFlightRequest() {
@@ -492,8 +549,9 @@ public final class DetectionVM: ObservableObject {
         let expirationThreshold = timestamp.addingTimeInterval(-trackRetentionDuration)
         trackState = trackState.filter { $0.value.updatedAt >= expirationThreshold }
 
-#if canImport(CoreImage)
         let activeIDs = Set(trackState.keys)
+        maskMetadata = maskMetadata.filter { activeIDs.contains($0.key) }
+#if canImport(CoreImage)
         segmentationMasks = segmentationMasks.filter { activeIDs.contains($0.key) }
 #endif
 
@@ -523,6 +581,13 @@ public final class DetectionVM: ObservableObject {
         }
     }
 }
+
+#if canImport(SegmentationKit) && canImport(CoreVideo)
+private struct SegmentationMaskMetadata {
+    var lastBoundingBox: NormalizedRect
+    var lastRequest: Date
+}
+#endif
 
 // MARK: - Spatial Index for efficient track association
 
