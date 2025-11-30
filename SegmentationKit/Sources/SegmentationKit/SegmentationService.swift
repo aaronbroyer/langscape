@@ -92,7 +92,7 @@ public actor SegmentationService {
 #if canImport(CoreML)
         // 1. Image Encoder: Heavy, uses Neural Engine
         let encoderConfiguration = MLModelConfiguration()
-        encoderConfiguration.computeUnits = .all
+        encoderConfiguration.computeUnits = .cpuAndGPU
         self.encoderConfiguration = encoderConfiguration
 
         // 2. Prompt Encoder: Tiny but buggy on ANE, FORCE CPU
@@ -102,7 +102,7 @@ public actor SegmentationService {
 
         // 3. Mask Decoder: Medium, uses Neural Engine
         let decoderConfiguration = MLModelConfiguration()
-        decoderConfiguration.computeUnits = .all
+        decoderConfiguration.computeUnits = .cpuAndGPU
         self.decoderConfiguration = decoderConfiguration
 #endif
     }

@@ -19,6 +19,7 @@ import ImageIO
 private typealias DetectionRect = DetectionKit.NormalizedRect
 
 struct CameraPreviewView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var viewModel: DetectionVM
     @ObservedObject var gameViewModel: LabelScrambleVM
     @ObservedObject var contextManager: ContextManager
@@ -62,6 +63,9 @@ struct CameraPreviewView: View {
             .onChange(of: gameViewModel.round) { _, _ in
                 requestSegmentationForCurrentRound()
             }
+            .onChange(of: scenePhase) { _, phase in
+                viewModel.updateAppLifecycle(isActive: phase == .active)
+            }
         }
         .overlay(alignment: .topLeading) {
             contextBadge
@@ -69,9 +73,11 @@ struct CameraPreviewView: View {
                 .padding(.leading, 24)
         }
         .onAppear {
+            viewModel.updateAppLifecycle(isActive: scenePhase == .active)
             viewModel.setAutomaticSegmentationEnabled(false)
         }
         .onDisappear {
+            viewModel.updateAppLifecycle(isActive: false)
             viewModel.setAutomaticSegmentationEnabled(true)
         }
     }

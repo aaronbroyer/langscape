@@ -88,8 +88,11 @@ public final class DetectionVM: ObservableObject {
     private let maskRefreshIoUThreshold: Double = 0.75
     private let maskRefreshInterval: TimeInterval = 1.5
 #endif
-    private let maxInFlightRequests = 3
+    private let activeInFlightLimit = 2
+    private let suspendedInFlightLimit = 0
+    private var maxInFlightRequests: Int { isAppActive ? activeInFlightLimit : suspendedInFlightLimit }
     private var inFlightRequests = 0
+    private var isAppActive = true
 
     private init(
         service: any DetectionService,
@@ -175,8 +178,38 @@ public final class DetectionVM: ObservableObject {
         self.inputImageSize = size
     }
 
+    public func updateAppLifecycle(isActive: Bool) {
+        guard self.isAppActive != isActive else { return }
+        self.isAppActive = isActive
+        if !isActive {
+            inFlightRequests = 0
+            lastSubmissionDate = .distantPast
+            fps = 0
+            fpsWindowStart = nil
+            processedFrames = 0
+            droppedFrames = 0
+#if canImport(SegmentationKit) && canImport(CoreVideo)
+            resetSegmentationStateForSuspend()
+#endif
+            Task { await logger.log("DetectionVM: App suspended – pausing detection and GPU work.", level: .info, category: "DetectionKit.DetectionVM") }
+        } else {
+            Task { await logger.log("DetectionVM: App active – resuming detection pipeline.", level: .info, category: "DetectionKit.DetectionVM") }
+#if canImport(SegmentationKit) && canImport(CoreVideo)
+            if let serviceObject = segmentationServiceBox, !segmentationPrepared {
+                startSegmentationPreparation(serviceObject: serviceObject)
+            }
+#endif
+        }
+    }
+
     public func enqueue(_ request: DetectionRequest) {
         let logger = self.logger
+        guard isAppActive else {
+            droppedFrames += 1
+            let dropped = droppedFrames
+            Task { await logger.log("Dropping frame because app is inactive (total dropped: \(dropped)).", level: .debug, category: "DetectionKit.DetectionVM") }
+            return
+        }
         let now = Date()
         guard now.timeIntervalSince(lastSubmissionDate) >= throttleInterval else {
             droppedFrames += 1
@@ -443,6 +476,7 @@ public final class DetectionVM: ObservableObject {
         return moved || stale
     }
 
+    @available(iOS 17.0, macOS 15.0, tvOS 17.0, watchOS 10.0, *)
     private func scheduleSegmentation(
         for detection: Detection,
         reason: String,
@@ -533,6 +567,21 @@ public final class DetectionVM: ObservableObject {
         let areaB = b.size.width * b.size.height
         let uni = max(areaA + areaB - inter, 1e-9)
         return inter / uni
+    }
+
+    private func resetSegmentationStateForSuspend() {
+        pendingSegmentationDetections.removeAll()
+        userRequestedSegmentationIDs.removeAll()
+        maskMetadata.removeAll()
+#if canImport(CoreImage)
+        segmentationMasks.removeAll()
+#endif
+        segmentationFailureCount = 0
+        segmentationSuspendUntil = nil
+        segmentationDisabled = false
+        segmentationPrepared = false
+        segmentationPrepareTask?.cancel()
+        segmentationPrepareTask = nil
     }
 #endif
 
