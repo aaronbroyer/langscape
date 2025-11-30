@@ -887,7 +887,8 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         var material = UnlitMaterial()
         material.color = .init(tint: UIColor.systemCyan.withAlphaComponent(0.9))
         let opacityTexture = MaterialParameters.Texture(texture)
-        material.blending = .transparent(opacity: opacityTexture)
+        let opacity = PhysicallyBasedMaterial.Opacity(texture: opacityTexture)
+        material.blending = .transparent(opacity: opacity)
 
         let transform = Transform(matrix: raycastResult.worldTransform)
         let cameraPosition = camera.transform.translation
