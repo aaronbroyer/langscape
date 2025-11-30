@@ -7,6 +7,9 @@ import GameKitLS
 import UIComponents
 import DesignSystem
 import Utilities
+#if canImport(CoreImage)
+import CoreImage
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -385,6 +388,7 @@ struct CameraPreviewView: View {
     private func detectionOverlay(for detections: [Detection], in size: CGSize) -> some View {
         print("CameraPreviewView.detectionOverlay: Rendering \(detections.count) detections, showDetections=\(showDetections)")
         return ZStack {
+            segmentationGlowLayer(in: size)
             ForEach(detections) { detection in
                 let rect = frame(for: detection, in: size)
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -413,6 +417,35 @@ struct CameraPreviewView: View {
         }
         .frame(width: size.width, height: size.height)
         .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func segmentationGlowLayer(in size: CGSize) -> some View {
+        #if canImport(CoreImage)
+        if !viewModel.segmentationMasks.isEmpty, let cameraFrame = cameraFrameRect(in: size) {
+            ZStack {
+                ForEach(Array(viewModel.segmentationMasks.keys), id: \.self) { key in
+                    if let mask = viewModel.segmentationMasks[key],
+                       let image = neonGlowImage(for: mask) {
+                        Image(decorative: image, scale: 1.0)
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: cameraFrame.width, height: cameraFrame.height)
+                            .position(x: cameraFrame.midX, y: cameraFrame.midY)
+                            .blendMode(.screen)
+                            .opacity(0.85)
+                    }
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            .allowsHitTesting(false)
+            .transition(.opacity)
+        } else {
+            EmptyView()
+        }
+        #else
+        EmptyView()
+        #endif
     }
 }
 
@@ -664,24 +697,57 @@ private extension CameraPreviewView {
     }
 
     func frame(for normalizedRect: DetectionRect, in viewSize: CGSize) -> CGRect {
-        if let imgSize = viewModel.inputImageSize, imgSize.width > 0, imgSize.height > 0 {
-            let sw = viewSize.width
-            let sh = viewSize.height
-            let iw = imgSize.width
-            let ih = imgSize.height
-            let scale = max(sw / iw, sh / ih)
-            let dw = iw * scale
-            let dh = ih * scale
-            let offsetX = (sw - dw) / 2
-            let offsetY = (sh - dh) / 2
-            let x = offsetX + CGFloat(normalizedRect.origin.x) * dw
-            let y = offsetY + CGFloat(normalizedRect.origin.y) * dh
+        if let rect = cameraFrameRect(in: viewSize) {
+            let dw = rect.width
+            let dh = rect.height
+            let x = rect.origin.x + CGFloat(normalizedRect.origin.x) * dw
+            let y = rect.origin.y + CGFloat(normalizedRect.origin.y) * dh
             let w = CGFloat(normalizedRect.size.width) * dw
             let h = CGFloat(normalizedRect.size.height) * dh
             return CGRect(x: x, y: y, width: w, height: h)
         }
         return normalizedRect.rect(in: viewSize)
     }
+
+    func cameraFrameRect(in viewSize: CGSize) -> CGRect? {
+        guard let imgSize = viewModel.inputImageSize, imgSize.width > 0, imgSize.height > 0 else {
+            return nil
+        }
+        let sw = viewSize.width
+        let sh = viewSize.height
+        let iw = CGFloat(imgSize.width)
+        let ih = CGFloat(imgSize.height)
+        guard iw > 0, ih > 0 else { return nil }
+        let scale = max(sw / iw, sh / ih)
+        let dw = iw * scale
+        let dh = ih * scale
+        let offsetX = (sw - dw) / 2
+        let offsetY = (sh - dh) / 2
+        return CGRect(x: offsetX, y: offsetY, width: dw, height: dh)
+    }
+
+    #if canImport(CoreImage)
+    func neonGlowImage(for mask: CIImage) -> CGImage? {
+        let blurred = mask
+            .clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": 20])
+            .cropped(to: mask.extent)
+
+        let tinted = blurred.applyingFilter(
+            "CIFalseColor",
+            parameters: [
+                "inputColor0": CIColor(red: 0.0, green: 1.0, blue: 1.0, alpha: 0.95),
+                "inputColor1": CIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0)
+            ]
+        )
+
+        return CameraPreviewView.neonGlowContext.createCGImage(tinted, from: mask.extent)
+    }
+    #endif
+
+    #if canImport(CoreImage)
+    private static let neonGlowContext = CIContext()
+    #endif
 }
 
 private struct ARCameraView: UIViewRepresentable {
