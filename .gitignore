@@ -10,6 +10,7 @@ xcuserdata/
 
 .venv*
 .env
+SegmentationKit/Sources/SegmentationKit/Resources/.cache/
 
 # Ultralytics exports at repo root 
 /yolov8*.pt
