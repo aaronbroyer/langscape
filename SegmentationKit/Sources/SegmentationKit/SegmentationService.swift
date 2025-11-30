@@ -288,12 +288,37 @@ public actor SegmentationService {
         let scaleX = max(originalSize.width, 1) / max(mask.extent.width, 1)
         let scaleY = max(originalSize.height, 1) / max(mask.extent.height, 1)
         let upscaled = mask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
-        let edges = upscaled.applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 5.0])
+
+        let thresholdFilter = CIFilter.colorThreshold()
+        thresholdFilter.inputImage = upscaled
+        thresholdFilter.threshold = 0.5
+        guard let thresholded = thresholdFilter.outputImage else {
+            return upscaled
+        }
+
+        let gradient = CIFilter.morphologyGradient()
+        gradient.inputImage = thresholded
+        gradient.radius = 3
+        guard let edges = gradient.outputImage else {
+            return thresholded
+        }
+
         let cyan = CIImage(color: CIColor(red: 0, green: 1, blue: 1, alpha: 1)).cropped(to: edges.extent)
-        let blend = CIFilter(name: "CISourceInCompositing")
-        blend?.setValue(cyan, forKey: kCIInputImageKey)
-        blend?.setValue(edges, forKey: kCIInputBackgroundImageKey)
-        let outlined = blend?.outputImage ?? edges
+        let clear = CIImage(color: .clear).cropped(to: edges.extent)
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = cyan
+        blend.backgroundImage = clear
+        blend.maskImage = edges
+        var outlined = blend.outputImage ?? edges
+
+        let bloom = CIFilter.bloom()
+        bloom.inputImage = outlined
+        bloom.intensity = 1.0
+        bloom.radius = 10.0
+        if let bloomed = bloom.outputImage {
+            outlined = bloomed.cropped(to: edges.extent)
+        }
+
         let canvas = CGRect(origin: .zero, size: originalSize)
         let padding: CGFloat = 8
         let clippedPrompt = prompt
