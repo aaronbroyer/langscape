@@ -396,12 +396,14 @@ struct CameraPreviewView: View {
         gameViewModel.beginScanning()
     }
 
-    private func detectionOverlay(for detections: [Detection], in size: CGSize) -> some View {
+    private func detectionOverlay(for detections: [Detection], in size: CGSize) -> AnyView {
 #if canImport(CoreImage)
         guard shouldShowMaskOverlay(for: gameViewModel.phase), let cameraFrame = cameraFrameRect(in: size) else {
-            return Color.clear
-                .frame(width: size.width, height: size.height)
-                .allowsHitTesting(false)
+            return AnyView(
+                Color.clear
+                    .frame(width: size.width, height: size.height)
+                    .allowsHitTesting(false)
+            )
         }
         let maskIDs = Set(viewModel.segmentationMasks.keys)
         Self.maskCache.prune(keeping: maskIDs)
@@ -410,15 +412,19 @@ struct CameraPreviewView: View {
             guard let cgImage = Self.maskCache.image(for: id, mask: mask) else { return nil }
             return SegmentationMaskDrawable(id: id, cgImage: cgImage)
         }
-        return SegmentationOverlayLayer(
-            masks: masks,
-            cameraFrame: cameraFrame,
-            viewSize: size
+        return AnyView(
+            SegmentationOverlayLayer(
+                masks: masks,
+                cameraFrame: cameraFrame,
+                viewSize: size
+            )
         )
 #else
-        return Color.clear
-            .frame(width: size.width, height: size.height)
-            .allowsHitTesting(false)
+        return AnyView(
+            Color.clear
+                .frame(width: size.width, height: size.height)
+                .allowsHitTesting(false)
+        )
 #endif
     }
 
