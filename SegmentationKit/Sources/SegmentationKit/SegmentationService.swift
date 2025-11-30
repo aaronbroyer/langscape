@@ -281,10 +281,10 @@ public actor SegmentationService {
             colorSpace: CGColorSpaceCreateDeviceRGB()
         )
 
-        return stylizeOutline(base, originalSize: originalSize)
+        return stylizeOutline(base, prompt: prompt, originalSize: originalSize)
     }
 
-    private func stylizeOutline(_ mask: CIImage, originalSize: CGSize) -> CIImage {
+    private func stylizeOutline(_ mask: CIImage, prompt: CGRect, originalSize: CGSize) -> CIImage {
         let scaleX = max(originalSize.width, 1) / max(mask.extent.width, 1)
         let scaleY = max(originalSize.height, 1) / max(mask.extent.height, 1)
         let upscaled = mask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
@@ -293,7 +293,20 @@ public actor SegmentationService {
         let blend = CIFilter(name: "CISourceInCompositing")
         blend?.setValue(cyan, forKey: kCIInputImageKey)
         blend?.setValue(edges, forKey: kCIInputBackgroundImageKey)
-        return blend?.outputImage ?? edges
+        let outlined = blend?.outputImage ?? edges
+        let canvas = CGRect(origin: .zero, size: originalSize)
+        let padding: CGFloat = 8
+        let clippedPrompt = prompt
+            .insetBy(dx: -padding, dy: -padding)
+            .intersection(canvas)
+        guard !clippedPrompt.isNull,
+              clippedPrompt.width > 1,
+              clippedPrompt.height > 1 else {
+            return outlined
+        }
+        return outlined
+            .cropped(to: clippedPrompt)
+            .transformed(by: CGAffineTransform(translationX: -clippedPrompt.minX, y: -clippedPrompt.minY))
     }
 
     private func prepareInputBuffer(_ buffer: CVPixelBuffer) throws -> CVPixelBuffer {
