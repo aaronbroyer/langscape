@@ -54,6 +54,7 @@ public enum SegmentationServiceError: Error {
 }
 
 /// Handles running SAM 3 encoder + decoder as a two-stage pipeline.
+@available(macOS 15.0, iOS 17.0, tvOS 17.0, watchOS 10.0, *)
 public actor SegmentationService {
     public static let shared = SegmentationService()
 
@@ -77,6 +78,7 @@ public actor SegmentationService {
     private var decoder: MLModel?
     private let ciContext = CIContext()
     private let targetImageSize = CGSize(width: 1024, height: 1024)
+    private let maxPromptPointCount = 15
 #if canImport(CoreVideo)
     private var cachedImageFeatures: ImageFeatures?
     private var lastFrameFingerprint: UInt64?
@@ -89,7 +91,7 @@ public actor SegmentationService {
         self.logger = logger
 #if canImport(CoreML)
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .cpuOnly
+        configuration.computeUnits = .all
         self.modelConfiguration = configuration
 #endif
     }
@@ -112,37 +114,47 @@ public actor SegmentationService {
     /// Main entry point triggered by the detection system.
     public func segment(_ request: SegmentationRequest) async throws -> CIImage {
         #if canImport(CoreML)
-        if encoder == nil || decoder == nil || promptEncoder == nil {
-            try await prepare()
+        do {
+            if encoder == nil || decoder == nil || promptEncoder == nil {
+                try await prepare()
+            }
+            guard let encoder else { throw SegmentationServiceError.encoderUnavailable }
+            guard let promptEncoder else { throw SegmentationServiceError.modelNotFound("SAM prompt encoder missing") }
+            guard let decoder else { throw SegmentationServiceError.decoderUnavailable }
+
+            let preparedBuffer = try prepareInputBuffer(request.pixelBuffer)
+            let inputImageSize = CGSize(width: CVPixelBufferGetWidth(preparedBuffer), height: CVPixelBufferGetHeight(preparedBuffer))
+
+            if needsNewEmbeddings(for: request) {
+                cachedImageFeatures = try runEncoder(preparedBuffer, encoder: encoder)
+                lastFrameFingerprint = fingerprint(for: request.pixelBuffer)
+                lastFrameTimestamp = request.timestamp
+            }
+
+            guard let imageFeatures = cachedImageFeatures else {
+                throw SegmentationServiceError.failedToCreateEmbeddings
+            }
+
+            let promptPoints = convertBoxToPrompts(request.prompt, originalSize: request.imageSize, inputImageSize: inputImageSize)
+            let promptLabels = boxPromptLabels()
+            let promptEmbeddings = try runPromptEncoder(points: promptPoints, labels: promptLabels, promptEncoder: promptEncoder)
+
+            return try runDecoder(
+                imageFeatures: imageFeatures,
+                promptEmbeddings: promptEmbeddings,
+                decoder: decoder,
+                originalSize: request.imageSize,
+                prompt: request.prompt
+            )
+        } catch {
+            let nsError = error as NSError
+            await logger.log(
+                "SegmentationService failed [\(nsError.domain):\(nsError.code)]: \(error.localizedDescription)",
+                level: .error,
+                category: "SegmentationKit.SAM"
+            )
+            throw error
         }
-        guard let encoder else { throw SegmentationServiceError.encoderUnavailable }
-        guard let promptEncoder else { throw SegmentationServiceError.modelNotFound("SAM prompt encoder missing") }
-        guard let decoder else { throw SegmentationServiceError.decoderUnavailable }
-
-        let preparedBuffer = try prepareInputBuffer(request.pixelBuffer)
-        let inputImageSize = CGSize(width: CVPixelBufferGetWidth(preparedBuffer), height: CVPixelBufferGetHeight(preparedBuffer))
-
-        if needsNewEmbeddings(for: request) {
-            cachedImageFeatures = try runEncoder(preparedBuffer, encoder: encoder)
-            lastFrameFingerprint = fingerprint(for: request.pixelBuffer)
-            lastFrameTimestamp = request.timestamp
-        }
-
-        guard let imageFeatures = cachedImageFeatures else {
-            throw SegmentationServiceError.failedToCreateEmbeddings
-        }
-
-        let promptPoints = try convertBoxToPrompts(request.prompt, originalSize: request.imageSize, inputImageSize: inputImageSize)
-        let promptLabels = try boxPromptLabels()
-        let promptEmbeddings = try runPromptEncoder(points: promptPoints, labels: promptLabels, promptEncoder: promptEncoder)
-
-        return try runDecoder(
-            imageFeatures: imageFeatures,
-            promptEmbeddings: promptEmbeddings,
-            decoder: decoder,
-            originalSize: request.imageSize,
-            prompt: request.prompt
-        )
         #else
         throw SegmentationServiceError.unsupportedPlatform
         #endif
@@ -167,11 +179,9 @@ public actor SegmentationService {
 
     private func runEncoder(_ pixelBuffer: CVPixelBuffer, encoder: MLModel) throws -> ImageFeatures {
         let inputKey = encoder.modelDescription.imageInputKey
-
         let provider = try MLDictionaryFeatureProvider(dictionary: [
             inputKey: MLFeatureValue(pixelBuffer: pixelBuffer)
         ])
-
         let output = try encoder.prediction(from: provider)
         guard
             let imageEmbedding = output.featureValue(for: "image_embedding")?.multiArrayValue,
@@ -183,10 +193,16 @@ public actor SegmentationService {
         return ImageFeatures(imageEmbedding: imageEmbedding, featsS0: featsS0, featsS1: featsS1)
     }
 
-    private func runPromptEncoder(points: MLMultiArray, labels: MLMultiArray, promptEncoder: MLModel) throws -> PromptEmbeddings {
+    private func runPromptEncoder(
+        points: MLShapedArray<Float16>,
+        labels: MLShapedArray<Float16>,
+        promptEncoder: MLModel
+    ) throws -> PromptEmbeddings {
+        let pointsArray = MLMultiArray(points)
+        let labelsArray = MLMultiArray(labels)
         let provider = try MLDictionaryFeatureProvider(dictionary: [
-            "points": MLFeatureValue(multiArray: points),
-            "labels": MLFeatureValue(multiArray: labels)
+            "points": MLFeatureValue(multiArray: pointsArray),
+            "labels": MLFeatureValue(multiArray: labelsArray)
         ])
         let output = try promptEncoder.prediction(from: provider)
         guard
@@ -212,18 +228,20 @@ public actor SegmentationService {
             "feats_s0": MLFeatureValue(multiArray: imageFeatures.featsS0),
             "feats_s1": MLFeatureValue(multiArray: imageFeatures.featsS1)
         ])
-
         let output = try decoder.prediction(from: provider)
-
         guard
-            let maskArray = output.featureValue(for: "low_res_masks")?.multiArrayValue,
-            let scoresArray = output.featureValue(for: "scores")?.multiArrayValue
+            let lowResMasks = output.featureValue(for: "low_res_masks")?.multiArrayValue,
+            let scores = output.featureValue(for: "scores")?.multiArrayValue
         else {
             throw SegmentationServiceError.failedToCreateMask
         }
-
-        let bestMaskIndex = bestMaskIndex(from: scoresArray)
-        return try convertLogitsToMask(maskArray, maskIndex: bestMaskIndex, originalSize: originalSize, prompt: prompt)
+        let bestMaskIndex = bestMaskIndex(from: scores)
+        return try convertLogitsToMask(
+            lowResMasks,
+            maskIndex: bestMaskIndex,
+            originalSize: originalSize,
+            prompt: prompt
+        )
     }
 
     private func bestMaskIndex(from scores: MLMultiArray) -> Int {
@@ -346,32 +364,52 @@ public actor SegmentationService {
         return output
     }
 
-    private func convertBoxToPrompts(_ prompt: CGRect, originalSize: CGSize, inputImageSize: CGSize) throws -> MLMultiArray {
-        let coords = try MLMultiArray(shape: [1, 2, 2], dataType: .float16)
+    private func convertBoxToPrompts(_ prompt: CGRect, originalSize: CGSize, inputImageSize: CGSize) -> MLShapedArray<Float16> {
         let sx = inputImageSize.width / max(originalSize.width, 1)
         let sy = inputImageSize.height / max(originalSize.height, 1)
+
         let topLeft = CGPoint(x: prompt.minX * sx, y: prompt.minY * sy)
         let bottomRight = CGPoint(x: prompt.maxX * sx, y: prompt.maxY * sy)
-        setCoords(coords, batch: 0, point: 0, x: Float(topLeft.x), y: Float(topLeft.y))
-        setCoords(coords, batch: 0, point: 1, x: Float(bottomRight.x), y: Float(bottomRight.y))
-        return coords
+
+        let clampedTopLeft = clamp(point: topLeft, maxSize: inputImageSize)
+        let clampedBottomRight = clamp(point: bottomRight, maxSize: inputImageSize)
+        let maxPoints = maxPromptPointCount
+
+        return MLShapedArray<Float16>(unsafeUninitializedShape: [1, maxPoints, 2]) { buffer, _ in
+            buffer.initialize(repeating: Float16(0))
+
+            func writePoint(_ index: Int, point: CGPoint) {
+                guard index < maxPoints else { return }
+                let base = index * 2
+                buffer[base] = Float16(Float(point.x))
+                buffer[base + 1] = Float16(Float(point.y))
+            }
+
+            writePoint(0, point: clampedTopLeft)
+            writePoint(1, point: clampedBottomRight)
+        }
     }
 
-    private func boxPromptLabels() throws -> MLMultiArray {
-        let labels = try MLMultiArray(shape: [1, 2], dataType: .float16)
-        setLabel(labels, batch: 0, index: 0, value: 2)
-        setLabel(labels, batch: 0, index: 1, value: 3)
-        return labels
+    private func boxPromptLabels() -> MLShapedArray<Float16> {
+        let maxPoints = maxPromptPointCount
+        return MLShapedArray<Float16>(unsafeUninitializedShape: [1, maxPoints]) { buffer, _ in
+            buffer.initialize(repeating: Float16(-1))
+            if maxPoints > 0 { buffer[0] = Float16(2) }
+            if maxPoints > 1 { buffer[1] = Float16(3) }
+        }
     }
 
-    private func setCoords(_ array: MLMultiArray, batch: Int, point: Int, x: Float, y: Float) {
-        array[[NSNumber(value: batch), NSNumber(value: point), NSNumber(value: 0)]] = NSNumber(value: x)
-        array[[NSNumber(value: batch), NSNumber(value: point), NSNumber(value: 1)]] = NSNumber(value: y)
+    private func clamp(point: CGPoint, maxSize: CGSize) -> CGPoint {
+        func clamp(_ value: CGFloat, upperBound: CGFloat) -> CGFloat {
+            guard upperBound > 0 else { return 0 }
+            return min(max(value, 0), upperBound - 1)
+        }
+        return CGPoint(
+            x: clamp(point.x, upperBound: maxSize.width),
+            y: clamp(point.y, upperBound: maxSize.height)
+        )
     }
 
-    private func setLabel(_ array: MLMultiArray, batch: Int, index: Int, value: Float) {
-        array[[NSNumber(value: batch), NSNumber(value: index)]] = NSNumber(value: value)
-    }
     #endif
 
     // MARK: - Stability

@@ -27,7 +27,6 @@ struct CameraPreviewView: View {
     @State private var showCompletionFlash = false
     @State private var homeCardPressed = false
     @State private var startPulse = false
-    @State private var showDetections = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -353,15 +352,12 @@ struct CameraPreviewView: View {
             }
         case .ready:
             startPulseAnimation()
-            print("CameraPreviewView: State .ready - hiding detections")
-            withAnimation(.easeInOut(duration: 0.2)) { showDetections = false }
+            print("CameraPreviewView: State .ready - prepping segmentation")
             requestSegmentationForCurrentRound()
         case .scanning:
-            print("CameraPreviewView: State .scanning - hiding detections")
-            withAnimation(.easeInOut(duration: 0.2)) { showDetections = false }
+            print("CameraPreviewView: State .scanning - prepping segmentation")
         case .playing, .paused:
-            print("CameraPreviewView: State .playing/.paused - HIDING detections")
-            withAnimation(.easeInOut(duration: 0.2)) { showDetections = false }
+            print("CameraPreviewView: State .playing/.paused - hiding 2D overlays")
             requestSegmentationForCurrentRound()
         default:
             if startPulse {
@@ -399,44 +395,10 @@ struct CameraPreviewView: View {
     }
 
     private func detectionOverlay(for detections: [Detection], in size: CGSize) -> some View {
-        print("CameraPreviewView.detectionOverlay: Rendering \(detections.count) detections, showDetections=\(showDetections)")
-        return ZStack {
-            if showDetections {
-                ForEach(detections) { detection in
-                    let rect = boundingRect(for: detection, in: size)
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(ColorPalette.accent.swiftUIColor.opacity(0.9), lineWidth: 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.black.opacity(0.18))
-                        )
-                        .frame(width: rect.width, height: rect.height)
-                        .overlay(alignment: .topLeading) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(detection.label.capitalized)
-                                    .font(Typography.caption.font.weight(.semibold))
-                                    .foregroundStyle(Color.white)
-
-                                Text("\(Int(detection.confidence * 100))%")
-                                    .font(Typography.caption.font)
-                                    .foregroundStyle(Color.white.opacity(0.75))
-                            }
-                            .padding(Spacing.xSmall.cgFloat)
-                            .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .offset(x: 6, y: 6)
-                        }
-                        .position(x: rect.midX, y: rect.midY)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            viewModel.requestSegmentation(for: detection.id)
-                        }
-                }
-            } else {
-                Color.clear
-            }
-        }
-        .frame(width: size.width, height: size.height)
-        .allowsHitTesting(false)
+        print("CameraPreviewView.detectionOverlay: Rendering \(detections.count) detections (overlay disabled)")
+        return Color.clear
+            .frame(width: size.width, height: size.height)
+            .allowsHitTesting(false)
     }
 
     private func boundingRect(for detection: Detection, in viewSize: CGSize) -> CGRect {
