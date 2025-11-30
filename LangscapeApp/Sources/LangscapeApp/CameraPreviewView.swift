@@ -466,24 +466,24 @@ struct CameraPreviewView: View {
 
     @ViewBuilder
     private func objectGlowLayer(in size: CGSize) -> some View {
-        guard let round = gameViewModel.round,
-              [.ready, .playing, .paused].contains(gameViewModel.phase) else {
-            EmptyView()
-            return
-        }
-        let pendingIDs = pendingObjectIDs(for: round)
-        let targets = round.objects.filter { pendingIDs.contains($0.id) }
-        if targets.isEmpty {
-            EmptyView()
-        } else {
-            ZStack {
-                ForEach(targets, id: \.id) { object in
-                    glowView(for: object, in: size)
+        if let round = gameViewModel.round,
+           [.ready, .playing, .paused].contains(gameViewModel.phase) {
+            let pendingIDs = pendingObjectIDs(for: round)
+            let targets = round.objects.filter { pendingIDs.contains($0.id) }
+            if targets.isEmpty {
+                EmptyView()
+            } else {
+                ZStack {
+                    ForEach(targets, id: \.id) { object in
+                        glowView(for: object, in: size)
+                    }
                 }
+                .frame(width: size.width, height: size.height)
+                .allowsHitTesting(false)
+                .animation(.easeInOut(duration: 0.18), value: targets.map(\.boundingBox))
             }
-            .frame(width: size.width, height: size.height)
-            .allowsHitTesting(false)
-            .animation(.easeInOut(duration: 0.18), value: targets.map(\.boundingBox))
+        } else {
+            EmptyView()
         }
     }
 
@@ -499,33 +499,33 @@ struct CameraPreviewView: View {
     @ViewBuilder
     private func glowView(for object: DetectedObject, in size: CGSize) -> some View {
         let rect = frame(for: object, in: size)
-        guard rect.width > 2, rect.height > 2 else {
+        if rect.width <= 2 || rect.height <= 2 {
             EmptyView()
-            return
-        }
-        let corner = min(rect.width, rect.height) * 0.25
-        let gradient = RadialGradient(
-            gradient: Gradient(colors: [
-                ColorPalette.accent.swiftUIColor.opacity(0.8),
-                ColorPalette.accent.swiftUIColor.opacity(0.05)
-            ]),
-            center: .center,
-            startRadius: 8,
-            endRadius: max(rect.width, rect.height) * 0.6
-        )
-
-        RoundedRectangle(cornerRadius: corner, style: .continuous)
-            .fill(gradient)
-            .frame(width: rect.width, height: rect.height)
-            .position(x: rect.midX, y: rect.midY)
-            .blendMode(.screen)
-            .overlay(
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .stroke(ColorPalette.accent.swiftUIColor.opacity(0.85), lineWidth: 2.5)
-                    .blur(radius: 1.5)
+        } else {
+            let corner = min(rect.width, rect.height) * 0.25
+            let gradient = RadialGradient(
+                gradient: Gradient(colors: [
+                    ColorPalette.accent.swiftUIColor.opacity(0.8),
+                    ColorPalette.accent.swiftUIColor.opacity(0.05)
+                ]),
+                center: .center,
+                startRadius: 8,
+                endRadius: max(rect.width, rect.height) * 0.6
             )
-            .shadow(color: ColorPalette.accent.swiftUIColor.opacity(0.3), radius: 12)
-            .transition(.opacity.combined(with: .scale))
+
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .fill(gradient)
+                .frame(width: rect.width, height: rect.height)
+                .position(x: rect.midX, y: rect.midY)
+                .blendMode(.screen)
+                .overlay(
+                    RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .stroke(ColorPalette.accent.swiftUIColor.opacity(0.85), lineWidth: 2.5)
+                        .blur(radius: 1.5)
+                )
+                .shadow(color: ColorPalette.accent.swiftUIColor.opacity(0.3), radius: 12)
+                .transition(.opacity.combined(with: .scale))
+        }
     }
 }
 
