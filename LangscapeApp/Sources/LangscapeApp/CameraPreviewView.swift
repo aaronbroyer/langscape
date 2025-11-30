@@ -885,6 +885,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
     }
 
 #if canImport(CoreImage)
+    @MainActor
     func updateWorldGlows(
         arView: ARView,
         phase: LabelScrambleVM.Phase,
@@ -918,12 +919,16 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
                       let snapshot = snapshotLookup[maskID],
                       let viewRect = projectedRect(for: snapshot.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size),
                       viewRect.width > 2, viewRect.height > 2,
-                      let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView) else { continue }
+                      let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView),
+                      isRaycastValid(raycastResult, camera: frame.camera) else { continue }
 
                 let depth = distanceFromCamera(to: raycastResult.worldTransform.translation, camera: frame.camera)
                 guard let planeSize = planeSizeInMeters(for: snapshot.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera) else { continue }
 
-                let texture = textureCache.texture(for: maskID, mask: mask)
+                guard let texture = textureCache.texture(for: maskID, mask: mask) else {
+                    print("⚠️ Segmentation mask texture missing for \(maskID). Skipping anchor to avoid full-screen overlay.")
+                    continue
+                }
                 placeOverlay(
                     id: maskID,
                     texture: texture,
@@ -968,6 +973,13 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         return nil
     }
 
+    private func isRaycastValid(_ result: ARRaycastResult, camera: ARCamera) -> Bool {
+        let position = result.worldTransform.translation
+        let components = [position.x, position.y, position.z]
+        guard components.allSatisfy({ $0.isFinite }) else { return false }
+        return distanceFromCamera(to: position, camera: camera) > 0.05
+    }
+
     private func distanceFromCamera(to position: SIMD3<Float>, camera: ARCamera) -> Float {
         let cameraPosition = camera.transform.translation
         return simd_length(position - cameraPosition)
@@ -990,9 +1002,10 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         return SIMD2<Float>(widthMeters, heightMeters)
     }
 
+    @MainActor
     private func placeOverlay(
         id: UUID,
-        texture: TextureResource?,
+        texture: TextureResource,
         size: SIMD2<Float>,
         raycastResult: ARRaycastResult,
         camera: ARCamera,
@@ -1004,14 +1017,9 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
 
         var material = UnlitMaterial()
         let baseTint = UIColor.systemCyan
-        if let texture {
-            material.color = .init(tint: baseTint.withAlphaComponent(0.95))
-            let opacityTexture = MaterialParameters.Texture(texture)
-            material.blending = .transparent(opacity: .init(texture: opacityTexture))
-        } else {
-            material.color = .init(tint: baseTint.withAlphaComponent(0.5))
-            print("⚠️ Segmentation mask texture missing for \(id). Rendering solid debug plane.")
-        }
+        material.color = .init(tint: baseTint.withAlphaComponent(0.95))
+        let opacityTexture = MaterialParameters.Texture(texture)
+        material.blending = .transparent(opacity: .init(texture: opacityTexture))
 
         let transform = Transform(matrix: raycastResult.worldTransform)
         let cameraPosition = camera.transform.translation
@@ -1099,8 +1107,9 @@ private struct GlowOverlay {
     let entity: ModelEntity
 }
 
+@MainActor
 private final class MaskTextureCache {
-    private let ciContext = CIContext()
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private var cache: [UUID: TextureResource] = [:]
     private let options = TextureResource.CreateOptions(semantic: .raw)
 

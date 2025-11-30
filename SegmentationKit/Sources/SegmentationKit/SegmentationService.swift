@@ -76,7 +76,7 @@ public actor SegmentationService {
     private var decoder: MLModel?
     private var prepareTask: Task<Void, Error>?
     
-    private let ciContext = CIContext()
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private let targetImageSize = CGSize(width: 1024, height: 1024) // SAM 2 Standard
     
 #if canImport(CoreVideo)
@@ -248,60 +248,52 @@ public actor SegmentationService {
     }
 
     private func convertLogitsToMask(_ logits: MLMultiArray, maskIndex: Int, originalSize: CGSize, prompt: CGRect) throws -> CIImage {
-        // logits shape: [1, 3, 256, 256]
-        let width = 256
-        let height = 256
-        
-        // Extract specific mask channel
-        // CoreML MLMultiArray is [Batch, Channel, Height, Width] or flattened
-        // We iterate manually to build a bitmap
-        var bitmap = [UInt8](repeating: 0, count: width * height)
-        
-        // Pointer access is faster
-        let ptr = UnsafePointer<Float>(OpaquePointer(logits.dataPointer))
-        let strideC = width * height // Stride for channels
-        let offset = maskIndex * strideC
-        
-        for i in 0..<(width * height) {
-            let val = ptr[offset + i]
-            // Sigmoid: 1 / (1 + exp(-x))
-            // But optimization: if val > 0 it's > 0.5 prob.
-            bitmap[i] = val > 0 ? 255 : 0 
+        guard logits.shape.count == 4 else { throw SegmentationServiceError.failedToCreateMask }
+        let channels = logits.shape[1].intValue
+        let height = logits.shape[2].intValue
+        let width = logits.shape[3].intValue
+        let total = width * height
+        guard channels > 0, maskIndex < channels, total > 0 else {
+            throw SegmentationServiceError.failedToCreateMask
         }
-        
-        let data = Data(bitmap)
-        let maskImage = CIImage(
+
+        var pixels = [UInt8](repeating: 0, count: total * 4)
+        let floatPointer = UnsafePointer<Float>(OpaquePointer(logits.dataPointer))
+        let channelOffset = maskIndex * total
+
+        for index in 0..<total {
+            let value = floatPointer[channelOffset + index]
+            if value > 0 {
+                let pixelIndex = index * 4
+                pixels[pixelIndex] = 255
+                pixels[pixelIndex + 1] = 255
+                pixels[pixelIndex + 2] = 255
+                pixels[pixelIndex + 3] = 255
+            }
+        }
+
+        let data = Data(pixels)
+        let base = CIImage(
             bitmapData: data,
-            bytesPerRow: width,
+            bytesPerRow: width * 4,
             size: CGSize(width: width, height: height),
-            format: .L8, // 8-bit grayscale
-            colorSpace: nil
+            format: .RGBA8,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
         )
-        
-        // Upscale to fit the prompt rect
-        return processAndStylize(maskImage, prompt: prompt, originalSize: originalSize)
+
+        return stylizeOutline(base, originalSize: originalSize)
     }
 
-    /// Creates the "Glowing Outline" effect
-    private func processAndStylize(_ smallMask: CIImage, prompt: CGRect, originalSize: CGSize) -> CIImage {
-        // 1. Scale 256x256 mask up to full screen
-        let scaleX = originalSize.width / 256.0
-        let scaleY = originalSize.height / 256.0
-        
-        let upscaled = smallMask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
-        
-        // 2. Create Outline (Edge Detection)
-        // Morphology Edge: Dilate - Erode, or Edges filter
-        let edges = upscaled.applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 10.0])
-
-        // 3. Colorize (Neon Cyan)
-        // Use sourceAtop to paint color ONLY where edges exist
-        let color = CIImage(color: CIColor(red: 0, green: 1, blue: 1, alpha: 1.0)) // Full Cyan
-        let coloredEdges = color.compositingOverImage(edges, operation: .sourceIn)
-        
-        // 4. Crop to the bounding box to save processing (Optional, but good for perf)
-        // For now, return full image to match screen
-        return coloredEdges
+    private func stylizeOutline(_ mask: CIImage, originalSize: CGSize) -> CIImage {
+        let scaleX = max(originalSize.width, 1) / max(mask.extent.width, 1)
+        let scaleY = max(originalSize.height, 1) / max(mask.extent.height, 1)
+        let upscaled = mask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+        let edges = upscaled.applyingFilter("CIEdges", parameters: [kCIInputIntensityKey: 5.0])
+        let cyan = CIImage(color: CIColor(red: 0, green: 1, blue: 1, alpha: 1)).cropped(to: edges.extent)
+        let blend = CIFilter(name: "CISourceInCompositing")
+        blend?.setValue(cyan, forKey: kCIInputImageKey)
+        blend?.setValue(edges, forKey: kCIInputBackgroundImageKey)
+        return blend?.outputImage ?? edges
     }
 
     private func prepareInputBuffer(_ buffer: CVPixelBuffer) throws -> CVPixelBuffer {
@@ -327,72 +319,78 @@ public actor SegmentationService {
         originalSize: CGSize,
         inputImageSize: CGSize
     ) throws -> (points: MLMultiArray, labels: MLMultiArray) {
-        // FIX: Calculate scale directly from original size to 1024x1024
-        // Do NOT invert Y. SAM 2 expects Image Coordinates (Top-Left origin).
-        
-        let scaleX = inputImageSize.width / originalSize.width
-        let scaleY = inputImageSize.height / originalSize.height
-        
-        // Scale the bounding box
-        let x1 = Float(prompt.minX * scaleX)
-        let y1 = Float(prompt.minY * scaleY)
-        let x2 = Float(prompt.maxX * scaleX)
-        let y2 = Float(prompt.maxY * scaleY)
-        
-        // Create Arrays (Fixed size 5 for Apple models)
-        let coords = try MLMultiArray(shape: [1, 5, 2], dataType: .float32)
-        let labels = try MLMultiArray(shape: [1, 5], dataType: .int32)
-        
-        // Fill with padding (-1)
-        for i in 0..<5 {
-            labels[[0, NSNumber(value: i)]] = -1
-            coords[[0, NSNumber(value: i), 0]] = 0
-            coords[[0, NSNumber(value: i), 1]] = 0
-        }
-        
-        // Point 1: Top-Left (Label 2)
-        coords[[0, 0, 0]] = NSNumber(value: x1)
-        coords[[0, 0, 1]] = NSNumber(value: y1)
+        let safeWidth = max(originalSize.width, 1)
+        let safeHeight = max(originalSize.height, 1)
+        var normalized = CGRect(
+            x: prompt.origin.x / safeWidth,
+            y: prompt.origin.y / safeHeight,
+            width: prompt.size.width / safeWidth,
+            height: prompt.size.height / safeHeight
+        ).standardized
+
+        let clampUnit: (CGFloat) -> CGFloat = { min(max($0, 0), 1) }
+        let minX = clampUnit(normalized.minX)
+        let minY = clampUnit(normalized.minY)
+        let maxX = clampUnit(normalized.maxX)
+        let maxY = clampUnit(normalized.maxY)
+        normalized = CGRect(
+            x: minX,
+            y: minY,
+            width: max(maxX - minX, 0.001),
+            height: max(maxY - minY, 0.001)
+        )
+
+        let scaleWidth = max(inputImageSize.width, 1)
+        let scaleHeight = max(inputImageSize.height, 1)
+        let scaled = CGRect(
+            x: normalized.minX * scaleWidth,
+            y: normalized.minY * scaleHeight,
+            width: normalized.width * scaleWidth,
+            height: normalized.height * scaleHeight
+        )
+
+        let points = try MLMultiArray(shape: [1, 2, 2], dataType: .float32)
+        let labels = try MLMultiArray(shape: [1, 2], dataType: .int32)
+
+        points[[0, 0, 0]] = NSNumber(value: Float(scaled.minX))
+        points[[0, 0, 1]] = NSNumber(value: Float(scaled.minY))
         labels[[0, 0]] = 2
-        
-        // Point 2: Bottom-Right (Label 3)
-        coords[[0, 1, 0]] = NSNumber(value: x2)
-        coords[[0, 1, 1]] = NSNumber(value: y2)
+
+        points[[0, 1, 0]] = NSNumber(value: Float(scaled.maxX))
+        points[[0, 1, 1]] = NSNumber(value: Float(scaled.maxY))
         labels[[0, 1]] = 3
-        
-        return (coords, labels)
+
+        return (points, labels)
     }
 #endif
     
     #if canImport(CoreVideo)
     private func needsNewEmbeddings(for request: SegmentationRequest) -> Bool {
-        if cachedImageFeatures == nil { return true }
+        guard cachedImageFeatures != nil else { return true }
         let fingerprint = fingerprint(for: request.pixelBuffer)
-        if let last = lastFrameFingerprint, let timestamp = Optional(lastFrameTimestamp), timestamp + stabilityInterval > request.timestamp {
-            return fingerprint != last
+        if let lastFingerprint = lastFrameFingerprint,
+           fingerprint == lastFingerprint,
+           request.timestamp - lastFrameTimestamp <= stabilityInterval {
+            return false
         }
-        return fingerprint != lastFrameFingerprint
+        return true
     }
 
     private func fingerprint(for buffer: CVPixelBuffer) -> UInt64 {
-        // Simple center-pixel check for performance
-        return 0 // Force update for now to ensure correctness, optimize later
+        // Cheap checksum: sample the center pixel. Good enough to detect drastic scene changes.
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(buffer) else { return 0 }
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        guard width > 0, height > 0 else { return 0 }
+        let x = width / 2
+        let y = height / 2
+        let offset = y * rowBytes + x
+        let data = baseAddress.assumingMemoryBound(to: UInt8.self)
+        let sample = UInt64(data[offset])
+        return sample
     }
     #endif
 }
-
-#if canImport(CoreImage)
-private extension CIImage {
-    func compositingOverImage(_ background: CIImage, operation: CGBlendMode) -> CIImage {
-        switch operation {
-        case .sourceIn:
-            let filter = CIFilter(name: "CISourceInCompositing")
-            filter?.setValue(self, forKey: kCIInputImageKey)
-            filter?.setValue(background, forKey: kCIInputBackgroundImageKey)
-            return filter?.outputImage ?? self.composited(over: background)
-        default:
-            return self.composited(over: background)
-        }
-    }
-}
-#endif
