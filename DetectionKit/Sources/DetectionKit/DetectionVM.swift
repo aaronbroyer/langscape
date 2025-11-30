@@ -73,7 +73,14 @@ public final class DetectionVM: ObservableObject {
     private let segmentationConfidenceGate: Double = 0.85
     private let segmentationAreaGate: Double = 0.35
     private var automaticSegmentationEnabled = false
+    private var segmentationFailureCount = 0
+    private var segmentationSuspendUntil: Date?
+    private var segmentationDisabled = false
+    private let segmentationFailureLimit = 3
+    private let segmentationFailureBackoff: TimeInterval = 10
 #endif
+    private let maxInFlightRequests = 3
+    private var inFlightRequests = 0
 
     public init(
         service: any DetectionService,
@@ -102,17 +109,25 @@ public final class DetectionVM: ObservableObject {
     }
 
     public func enqueue(_ request: DetectionRequest) {
+        let logger = self.logger
         let now = Date()
         guard now.timeIntervalSince(lastSubmissionDate) >= throttleInterval else {
             droppedFrames += 1
             let dropped = droppedFrames
-            let logger = self.logger
             Task { await logger.log("Dropping frame due to throttle (total dropped: \(dropped)).", level: .debug, category: "DetectionKit.DetectionVM") }
             return
         }
 
+        guard inFlightRequests < maxInFlightRequests else {
+            droppedFrames += 1
+            let dropped = droppedFrames
+            let backlog = inFlightRequests
+            Task { await logger.log("Dropping frame because \(backlog) detection tasks are still running (total dropped: \(dropped)).", level: .debug, category: "DetectionKit.DetectionVM") }
+            return
+        }
+
         lastSubmissionDate = now
-        let logger = self.logger
+        inFlightRequests += 1
         let processor = self.processor
         let errorStore = self.errorStore
 
@@ -187,6 +202,7 @@ public final class DetectionVM: ObservableObject {
                     )
                 )
             }
+            await viewModel.finishInFlightRequest()
         }
     }
 
@@ -252,6 +268,8 @@ public final class DetectionVM: ObservableObject {
     @MainActor
     private func evaluateSegmentationTriggers(_ detections: [Detection], pixelBuffer: CVPixelBuffer, timestamp: Date) {
         guard let service = segmentationService else { return }
+        if segmentationDisabled { return }
+        if let suspendUntil = segmentationSuspendUntil, Date() < suspendUntil { return }
         let candidate: Detection?
         if let manual = detections.first(where: { userRequestedSegmentationIDs.contains($0.id) }) {
             candidate = manual
@@ -291,19 +309,37 @@ public final class DetectionVM: ObservableObject {
                     self.segmentationMasks[detectionID] = mask
                     #endif
                     self.pendingSegmentationDetections.remove(detectionID)
+                    self.segmentationFailureCount = 0
+                    self.segmentationSuspendUntil = nil
                 }
                 await self.logger.log("Segmentation mask ready for \(detectionLabel)", level: .info, category: "DetectionKit.DetectionVM")
             } catch {
                 await MainActor.run {
                     self.pendingSegmentationDetections.remove(detectionID)
                 }
-                await self.logger.log("Segmentation failed for \(detectionLabel): \(error.localizedDescription)", level: .warning, category: "DetectionKit.DetectionVM")
+                await self.handleSegmentationFailure(error, label: detectionLabel)
             }
         }
     }
 #endif
 
 #if canImport(CoreVideo)
+    @MainActor
+    private func handleSegmentationFailure(_ error: Error, label: String) async {
+        segmentationFailureCount += 1
+        let message = "Segmentation failed for \(label): \(error.localizedDescription)"
+        if segmentationFailureCount >= segmentationFailureLimit {
+            segmentationDisabled = true
+            #if canImport(CoreImage)
+            segmentationMasks.removeAll()
+            #endif
+            await logger.log("\(message). Disabling segmentation for the remainder of the session.", level: .error, category: "DetectionKit.DetectionVM")
+            return
+        }
+        segmentationSuspendUntil = Date().addingTimeInterval(segmentationFailureBackoff)
+        await logger.log("\(message). Pausing segmentation for \(Int(segmentationFailureBackoff))s.", level: .warning, category: "DetectionKit.DetectionVM")
+    }
+
     private func promptRect(for boundingBox: NormalizedRect, pixelBuffer: CVPixelBuffer) -> CGRect {
         let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
         let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
@@ -320,6 +356,10 @@ public final class DetectionVM: ObservableObject {
         return clampedWidth * clampedHeight
     }
 #endif
+
+    private func finishInFlightRequest() {
+        inFlightRequests = max(0, inFlightRequests - 1)
+    }
 
     private func registerFrame(timestamp: Date) {
         if fpsWindowStart == nil {

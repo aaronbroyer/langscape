@@ -951,7 +951,10 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         guard now - lastFrameTime >= 0.25 else { return }
         lastFrameTime = now
 
-        let pixelBuffer = frame.capturedImage
+        guard let pixelBuffer = clonePixelBuffer(frame.capturedImage) else {
+            Task { await logger.log("Camera pipeline dropped a frame because the pixel buffer could not be cloned.", level: .warning, category: "LangscapeApp.Camera") }
+            return
+        }
         #if canImport(ImageIO)
         let orientationRaw = CGImagePropertyOrientation.right.rawValue
         #else
@@ -1100,6 +1103,50 @@ private func projectedCameraFrameRect(inputImageSize: CGSize?, viewSize: CGSize)
     let offsetY = (sh - dh) / 2
     return CGRect(x: offsetX, y: offsetY, width: dw, height: dh)
 }
+
+#if canImport(CoreVideo)
+private func clonePixelBuffer(_ source: CVPixelBuffer) -> CVPixelBuffer? {
+    let width = CVPixelBufferGetWidth(source)
+    let height = CVPixelBufferGetHeight(source)
+    let format = CVPixelBufferGetPixelFormatType(source)
+    var output: CVPixelBuffer?
+    let options: [CFString: Any] = [
+        kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+        kCVPixelBufferCGImageCompatibilityKey: true,
+        kCVPixelBufferCGBitmapContextCompatibilityKey: true
+    ]
+    guard CVPixelBufferCreate(
+        kCFAllocatorDefault,
+        width,
+        height,
+        format,
+        options as CFDictionary,
+        &output
+    ) == kCVReturnSuccess, let copy = output else {
+        return nil
+    }
+    CVBufferPropagateAttachments(source, copy)
+    CVPixelBufferLockBaseAddress(source, .readOnly)
+    CVPixelBufferLockBaseAddress(copy, [])
+    defer {
+        CVPixelBufferUnlockBaseAddress(copy, [])
+        CVPixelBufferUnlockBaseAddress(source, .readOnly)
+    }
+    guard let srcBase = CVPixelBufferGetBaseAddress(source),
+          let dstBase = CVPixelBufferGetBaseAddress(copy) else {
+        return nil
+    }
+    let srcBytesPerRow = CVPixelBufferGetBytesPerRow(source)
+    let dstBytesPerRow = CVPixelBufferGetBytesPerRow(copy)
+    let rows = CVPixelBufferGetHeight(source)
+    for row in 0..<rows {
+        let src = srcBase.advanced(by: row * srcBytesPerRow)
+        let dst = dstBase.advanced(by: row * dstBytesPerRow)
+        memcpy(dst, src, min(srcBytesPerRow, dstBytesPerRow))
+    }
+    return copy
+}
+#endif
 
 fileprivate extension simd_float4x4 {
     var translation: SIMD3<Float> {

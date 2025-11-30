@@ -60,6 +60,7 @@ public actor SegmentationService {
     private let logger: Logger
 
 #if canImport(CoreML)
+    private let modelConfiguration: MLModelConfiguration
     private struct ImageFeatures {
         let imageEmbedding: MLMultiArray
         let featsS0: MLMultiArray
@@ -86,6 +87,11 @@ public actor SegmentationService {
 
     public init(logger: Logger = .shared) {
         self.logger = logger
+#if canImport(CoreML)
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuOnly
+        self.modelConfiguration = configuration
+#endif
     }
 
     /// Loads encoder/decoder into memory. Safe to call multiple times.
@@ -148,7 +154,7 @@ public actor SegmentationService {
     #if canImport(CoreML)
     private func loadModel(named resource: String, in bundle: Bundle) throws -> MLModel {
         if let compiledURL = bundle.url(forResource: resource, withExtension: "mlmodelc") {
-            return try MLModel(contentsOf: compiledURL)
+            return try MLModel(contentsOf: compiledURL, configuration: modelConfiguration)
         }
 
         guard let packageURL = bundle.url(forResource: resource, withExtension: "mlpackage") else {
@@ -156,7 +162,7 @@ public actor SegmentationService {
         }
 
         let compiled = try MLModel.compileModel(at: packageURL)
-        return try MLModel(contentsOf: compiled)
+        return try MLModel(contentsOf: compiled, configuration: modelConfiguration)
     }
 
     private func runEncoder(_ pixelBuffer: CVPixelBuffer, encoder: MLModel) throws -> ImageFeatures {

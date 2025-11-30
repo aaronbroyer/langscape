@@ -17,7 +17,11 @@ struct LangscapeAppMain: App {
 
     init() {
         let service = CombinedDetector(geminiAPIKey: Secrets.geminiAPIKey)
-        let detectionVM = DetectionVM(service: service, geminiAPIKey: Secrets.geminiAPIKey)
+        let detectionVM = DetectionVM(
+            service: service,
+            throttleInterval: 0.12,
+            geminiAPIKey: Secrets.geminiAPIKey
+        )
         _detectionViewModel = StateObject(wrappedValue: detectionVM)
 
         let scrambleVM = LabelScrambleVM()

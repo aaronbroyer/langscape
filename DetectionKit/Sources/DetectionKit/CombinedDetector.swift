@@ -14,6 +14,8 @@ public actor CombinedDetector: DetectionService {
     private var vlmReady = false
     private var yoloReady = false
     private var refereeReady = false
+    private var consecutiveEmptyDetections = 0
+    private let maxEmptyDetectionsBeforeReset = 60
 
     public init(logger: Utilities.Logger = .shared, geminiAPIKey: String? = nil) {
         self.logger = logger
@@ -107,9 +109,24 @@ public actor CombinedDetector: DetectionService {
         }
 
         guard !yoloDetections.isEmpty else {
+            consecutiveEmptyDetections += 1
             await logger.log("CombinedDetector: No YOLO detections found", level: .warning, category: "DetectionKit.CombinedDetector")
+            if consecutiveEmptyDetections >= maxEmptyDetectionsBeforeReset {
+                consecutiveEmptyDetections = 0
+                await logger.log("CombinedDetector: YOLO returned 0 detections for \(maxEmptyDetectionsBeforeReset) consecutive frames – re-preparing model.", level: .warning, category: "DetectionKit.CombinedDetector")
+                yoloReady = false
+                do {
+                    try await yolo.prepare()
+                    yoloReady = true
+                    await logger.log("CombinedDetector: YOLO successfully re-prepared after zero-detection streak.", level: .info, category: "DetectionKit.CombinedDetector")
+                } catch {
+                    await logger.log("CombinedDetector: Failed to re-prepare YOLO after zero-detection streak: \(error.localizedDescription)", level: .error, category: "DetectionKit.CombinedDetector")
+                }
+            }
             return []
         }
+
+        consecutiveEmptyDetections = 0
 
         // Phase 2: Filter and Bucket YOLO detections
         let filtered = filter.filter(yoloDetections)
