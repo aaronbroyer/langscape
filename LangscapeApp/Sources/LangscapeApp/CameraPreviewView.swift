@@ -857,6 +857,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         self.contextManager = contextManager
     }
 
+    @MainActor
     func attach(to arView: ARView) {
         self.arView = arView
         arView.session.delegate = self
@@ -866,6 +867,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         Task { await logger.log("AR session configured", level: .info, category: "LangscapeApp.Camera") }
     }
 
+    @MainActor
     func detach(from arView: ARView) {
 #if canImport(CoreImage)
         clearAnchors(from: arView)
@@ -874,6 +876,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         self.arView = nil
     }
 
+    @MainActor
     func clearAnchors(from arView: ARView) {
 #if canImport(CoreImage)
         for overlay in glowOverlays.values {
@@ -1107,12 +1110,12 @@ private struct GlowOverlay {
     let entity: ModelEntity
 }
 
-@MainActor
 private final class MaskTextureCache {
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private var cache: [UUID: TextureResource] = [:]
     private let options = TextureResource.CreateOptions(semantic: .raw)
 
+    @MainActor
     func texture(for id: UUID, mask: CIImage) -> TextureResource? {
         if let cached = cache[id] {
             return cached
@@ -1127,6 +1130,7 @@ private final class MaskTextureCache {
         return texture
     }
 
+    @MainActor
     func prune(keeping ids: Set<UUID>) {
         guard !ids.isEmpty else {
             cache.removeAll()
@@ -1135,6 +1139,7 @@ private final class MaskTextureCache {
         cache = cache.filter { ids.contains($0.key) }
     }
 
+    @MainActor
     func removeAll() {
         cache.removeAll()
     }
