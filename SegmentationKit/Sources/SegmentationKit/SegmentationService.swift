@@ -121,6 +121,11 @@ public actor SegmentationService {
             guard let encoder else { throw SegmentationServiceError.encoderUnavailable }
             guard let promptEncoder else { throw SegmentationServiceError.modelNotFound("SAM prompt encoder missing") }
             guard let decoder else { throw SegmentationServiceError.decoderUnavailable }
+            await logger.log(
+                "SegmentationService: received request prompt=\(request.prompt.debugDescription) imageSize=\(request.imageSize)",
+                level: .debug,
+                category: "SegmentationKit.SAM"
+            )
 
             let preparedBuffer = try prepareInputBuffer(request.pixelBuffer)
             let inputImageSize = CGSize(width: CVPixelBufferGetWidth(preparedBuffer), height: CVPixelBufferGetHeight(preparedBuffer))

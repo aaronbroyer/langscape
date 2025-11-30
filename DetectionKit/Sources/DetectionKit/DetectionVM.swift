@@ -67,7 +67,7 @@ public final class DetectionVM: ObservableObject {
     private let fpsWindow: TimeInterval
     private var auxiliaryLoadTask: Task<Void, Never>?
 #if canImport(SegmentationKit) && canImport(CoreVideo)
-    private let segmentationService: SegmentationService?
+    private let segmentationServiceBox: AnyObject?
     private var pendingSegmentationDetections: Set<UUID> = []
     private var userRequestedSegmentationIDs: Set<UUID> = []
     private let segmentationConfidenceGate: Double = 0.85
@@ -82,14 +82,14 @@ public final class DetectionVM: ObservableObject {
     private let maxInFlightRequests = 3
     private var inFlightRequests = 0
 
-    public init(
+    private init(
         service: any DetectionService,
-        throttleInterval: TimeInterval = 0.06,
-        fpsWindow: TimeInterval = 1,
-        logger: Logger = .shared,
-        errorStore: ErrorStore = .shared,
-        geminiAPIKey: String? = nil,
-        segmentationService: SegmentationService? = SegmentationService.shared
+        throttleInterval: TimeInterval,
+        fpsWindow: TimeInterval,
+        logger: Logger,
+        errorStore: ErrorStore,
+        geminiAPIKey: String?,
+        segmentationServiceBox: AnyObject?
     ) {
         self.throttleInterval = throttleInterval
         self.logger = logger
@@ -99,10 +99,63 @@ public final class DetectionVM: ObservableObject {
         self.fpsWindow = fpsWindow
         self.errorStore = errorStore
 #if canImport(SegmentationKit) && canImport(CoreVideo)
-        self.segmentationService = segmentationService
+        self.segmentationServiceBox = segmentationServiceBox
+#else
+        _ = segmentationServiceBox
 #endif
         startAuxiliaryModelLoad(geminiAPIKey: geminiAPIKey)
     }
+
+#if canImport(SegmentationKit) && canImport(CoreVideo)
+    public convenience init(
+        service: any DetectionService,
+        throttleInterval: TimeInterval = 0.06,
+        fpsWindow: TimeInterval = 1,
+        logger: Logger = .shared,
+        errorStore: ErrorStore = .shared,
+        geminiAPIKey: String? = nil,
+        segmentationService: AnyObject? = nil
+    ) {
+        let resolvedService: AnyObject?
+        if #available(iOS 17.0, macOS 15.0, tvOS 17.0, watchOS 10.0, *) {
+            if let override = segmentationService as? SegmentationService {
+                resolvedService = override
+            } else {
+                resolvedService = SegmentationService.shared
+            }
+        } else {
+            resolvedService = nil
+        }
+        self.init(
+            service: service,
+            throttleInterval: throttleInterval,
+            fpsWindow: fpsWindow,
+            logger: logger,
+            errorStore: errorStore,
+            geminiAPIKey: geminiAPIKey,
+            segmentationServiceBox: resolvedService
+        )
+    }
+#else
+    public convenience init(
+        service: any DetectionService,
+        throttleInterval: TimeInterval = 0.06,
+        fpsWindow: TimeInterval = 1,
+        logger: Logger = .shared,
+        errorStore: ErrorStore = .shared,
+        geminiAPIKey: String? = nil
+    ) {
+        self.init(
+            service: service,
+            throttleInterval: throttleInterval,
+            fpsWindow: fpsWindow,
+            logger: logger,
+            errorStore: errorStore,
+            geminiAPIKey: geminiAPIKey,
+            segmentationServiceBox: nil
+        )
+    }
+#endif
 
     public func setInputSize(_ size: CGSize) {
         self.inputImageSize = size
@@ -209,6 +262,8 @@ public final class DetectionVM: ObservableObject {
 #if canImport(SegmentationKit) && canImport(CoreVideo)
     public func requestSegmentation(for detectionID: UUID) {
         userRequestedSegmentationIDs.insert(detectionID)
+        let label = detections.first(where: { $0.id == detectionID })?.label ?? "unknown"
+        Task { await logger.log("Segmentation manually requested for \(label) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM") }
     }
 
     public func setAutomaticSegmentationEnabled(_ enabled: Bool) {
@@ -267,7 +322,8 @@ public final class DetectionVM: ObservableObject {
 #if canImport(SegmentationKit) && canImport(CoreVideo)
     @MainActor
     private func evaluateSegmentationTriggers(_ detections: [Detection], pixelBuffer: CVPixelBuffer, timestamp: Date) {
-        guard let service = segmentationService else { return }
+        guard #available(iOS 17.0, macOS 15.0, tvOS 17.0, watchOS 10.0, *),
+              let service = segmentationServiceBox as? SegmentationService else { return }
         if segmentationDisabled { return }
         if let suspendUntil = segmentationSuspendUntil, Date() < suspendUntil { return }
         let candidate: Detection?
@@ -280,6 +336,14 @@ public final class DetectionVM: ObservableObject {
         } else {
             candidate = nil
         }
+        if candidate == nil, !userRequestedSegmentationIDs.isEmpty {
+            let activeIDs = Set(detections.map(\.id))
+            let staleRequests = userRequestedSegmentationIDs.subtracting(activeIDs)
+            if !staleRequests.isEmpty {
+                userRequestedSegmentationIDs.subtract(staleRequests)
+                Task { await logger.log("Segmentation: cleared \(staleRequests.count) stale requests", level: .debug, category: "DetectionKit.DetectionVM") }
+            }
+        }
         guard let target = candidate else { return }
         if pendingSegmentationDetections.contains(target.id) { return }
         let wasUserRequested = userRequestedSegmentationIDs.contains(target.id)
@@ -288,6 +352,7 @@ public final class DetectionVM: ObservableObject {
         }
         pendingSegmentationDetections.insert(target.id)
 
+        let reason = wasUserRequested ? "manual" : "automatic"
         let prompt = promptRect(for: target.boundingBox, pixelBuffer: pixelBuffer)
         let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
         let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
@@ -303,6 +368,7 @@ public final class DetectionVM: ObservableObject {
         Task(priority: .utility) { [weak self] in
             guard let self else { return }
             do {
+                await self.logger.log("Segmentation starting for \(detectionLabel) (\(reason)) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
                 let mask = try await service.segment(request)
                 await MainActor.run {
                     #if canImport(CoreImage)
@@ -314,7 +380,7 @@ public final class DetectionVM: ObservableObject {
                 }
                 await self.logger.log("Segmentation mask ready for \(detectionLabel)", level: .info, category: "DetectionKit.DetectionVM")
             } catch {
-                await MainActor.run {
+                _ = await MainActor.run {
                     self.pendingSegmentationDetections.remove(detectionID)
                 }
                 await self.handleSegmentationFailure(error, label: detectionLabel)
