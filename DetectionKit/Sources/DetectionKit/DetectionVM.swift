@@ -237,7 +237,12 @@ public final class DetectionVM: ObservableObject {
         pendingSegmentationDetections.insert(candidate.id)
 
         let prompt = promptRect(for: candidate.boundingBox, pixelBuffer: pixelBuffer)
-        let request = SegmentationRequest(pixelBuffer: pixelBuffer, prompt: prompt, timestamp: timestamp.timeIntervalSince1970)
+        let request = SegmentationRequest(
+            pixelBuffer: pixelBuffer,
+            prompt: prompt,
+            imageSize: CGSize(width: width, height: height),
+            timestamp: timestamp.timeIntervalSince1970
+        )
         let detectionID = candidate.id
         let detectionLabel = candidate.label
 

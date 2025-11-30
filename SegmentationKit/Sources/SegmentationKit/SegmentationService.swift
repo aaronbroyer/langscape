@@ -13,6 +13,10 @@ import CoreImage
 import CoreVideo
 #endif
 
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
+
 #if canImport(QuartzCore)
 import QuartzCore
 #endif
@@ -23,11 +27,13 @@ public struct SegmentationRequest {
     public let pixelBuffer: CVPixelBuffer
     public let prompt: CGRect
     public let timestamp: TimeInterval
+    public let imageSize: CGSize
 
-    public init(pixelBuffer: CVPixelBuffer, prompt: CGRect, timestamp: TimeInterval = CACurrentMediaTime()) {
+    public init(pixelBuffer: CVPixelBuffer, prompt: CGRect, imageSize: CGSize, timestamp: TimeInterval = CACurrentMediaTime()) {
         self.pixelBuffer = pixelBuffer
         self.prompt = prompt
         self.timestamp = timestamp
+        self.imageSize = imageSize
     }
 }
 #endif
@@ -39,6 +45,7 @@ public enum SegmentationServiceError: Error {
     case decoderUnavailable
     case failedToCreateEmbeddings
     case failedToCreateMask
+    case invalidInput
 }
 
 /// Handles running SAM 3 encoder + decoder as a two-stage pipeline.
@@ -47,11 +54,13 @@ public actor SegmentationService {
 
     private let logger: Logger
 
-    #if canImport(CoreML)
+#if canImport(CoreML)
     private var encoder: MLModel?
     private var decoder: MLModel?
     private let ciContext = CIContext()
-    #if canImport(CoreVideo)
+    private let targetImageSize = CGSize(width: 1024, height: 1024)
+    private let maskResolution = 256
+#if canImport(CoreVideo)
     private var cachedEmbeddings: MLMultiArray?
     private var lastFrameFingerprint: UInt64?
     private var lastFrameTimestamp: TimeInterval = 0
@@ -69,8 +78,8 @@ public actor SegmentationService {
         if encoder != nil, decoder != nil { return }
 
         let bundle = Bundle.module
-        self.encoder = try await loadModel(named: "sam3_encoder", in: bundle)
-        self.decoder = try await loadModel(named: "sam3_decoder", in: bundle)
+        self.encoder = try await loadModel(named: "SAM2ImageEncoder", in: bundle)
+        self.decoder = try await loadModel(named: "SAM2MaskDecoder", in: bundle)
         #else
         throw SegmentationServiceError.unsupportedPlatform
         #endif
@@ -83,13 +92,15 @@ public actor SegmentationService {
         guard let encoder, let decoder else {
             try await prepare()
             guard let encoder, let decoder else {
-                throw SegmentationServiceError.modelNotFound("SAM 3 CoreML bundles missing")
+                throw SegmentationServiceError.modelNotFound("SAM 2.1 CoreML bundles missing")
             }
             _ = (encoder, decoder)
         }
 
+        let preparedBuffer = try prepareInputBuffer(request.pixelBuffer)
+
         if needsNewEmbeddings(for: request) {
-            cachedEmbeddings = try await runEncoder(request.pixelBuffer)
+            cachedEmbeddings = try await runEncoder(preparedBuffer)
             lastFrameFingerprint = fingerprint(for: request.pixelBuffer)
             lastFrameTimestamp = request.timestamp
         }
@@ -97,7 +108,12 @@ public actor SegmentationService {
         guard let embeddings = cachedEmbeddings else {
             throw SegmentationServiceError.failedToCreateEmbeddings
         }
-        return try await runDecoder(embeddings: embeddings, prompt: request.prompt)
+        return try await runDecoder(
+            embeddings: embeddings,
+            prompt: request.prompt,
+            originalSize: request.imageSize,
+            inputImageSize: CGSize(width: CVPixelBufferGetWidth(preparedBuffer), height: CVPixelBufferGetHeight(preparedBuffer))
+        )
         #else
         throw SegmentationServiceError.unsupportedPlatform
         #endif
@@ -137,53 +153,128 @@ public actor SegmentationService {
         return embeddings
     }
 
-    private func runDecoder(embeddings: MLMultiArray, prompt: CGRect) async throws -> CIImage {
+    private func runDecoder(embeddings: MLMultiArray, prompt: CGRect, originalSize: CGSize, inputImageSize: CGSize) async throws -> CIImage {
         guard let decoder else { throw SegmentationServiceError.decoderUnavailable }
 
-        let embeddingsKey = decoder.modelDescription.multiArrayInputKey
-        let promptKey = decoder.modelDescription.promptInputKey
-        let outputKey = decoder.modelDescription.imageOutputKey
+        let embeddingsKey = "image_embeddings"
+        let coordsKey = "point_coords"
+        let labelsKey = "point_labels"
+        let maskInputKey = "mask_input"
+        let hasMaskInputKey = "has_mask_input"
+        let origSizeKey = "orig_im_size"
+        let outputKey = decoder.modelDescription.multiArrayOutputKey
 
-        let promptArray = try MLMultiArray(shape: [1, 4], dataType: .float32)
-        promptArray[0] = NSNumber(value: Float(prompt.origin.x))
-        promptArray[1] = NSNumber(value: Float(prompt.origin.y))
-        promptArray[2] = NSNumber(value: Float(prompt.size.width))
-        promptArray[3] = NSNumber(value: Float(prompt.size.height))
+        let coords = try convertBoxToPrompts(prompt, originalSize: originalSize, inputImageSize: inputImageSize)
+        let labels = try boxPromptLabels()
+        let maskInput = try emptyMaskInput()
+        let origImSize = try originalImageSizeArray(originalSize)
 
         let provider = try MLDictionaryFeatureProvider(dictionary: [
             embeddingsKey: MLFeatureValue(multiArray: embeddings),
-            promptKey: MLFeatureValue(multiArray: promptArray)
+            coordsKey: MLFeatureValue(multiArray: coords),
+            labelsKey: MLFeatureValue(multiArray: labels),
+            maskInputKey: MLFeatureValue(multiArray: maskInput),
+            hasMaskInputKey: MLFeatureValue(double: 0),
+            origSizeKey: MLFeatureValue(multiArray: origImSize)
         ])
 
         let output = try decoder.prediction(from: provider)
 
-        if let maskPixelBuffer = output.featureValue(for: outputKey)?.imageBufferValue {
-            return CIImage(cvPixelBuffer: maskPixelBuffer)
-        }
-
         if let maskArray = output.featureValue(for: outputKey)?.multiArrayValue {
-            return try ciImage(from: maskArray)
+            return try convertLogitsToMask(maskArray)
         }
 
         throw SegmentationServiceError.failedToCreateMask
     }
 
-    private func ciImage(from array: MLMultiArray) throws -> CIImage {
-        let width = array.shape.count > 1 ? array.shape[array.shape.count - 1].intValue : array.count
-        let height = array.shape.first?.intValue ?? 1
-        let buffer = UnsafeMutablePointer<Float>.allocate(capacity: array.count)
-        defer { buffer.deallocate() }
-        var idx = 0
-        for value in array {
-            buffer[idx] = value.floatValue
-            idx += 1
+    private func convertLogitsToMask(_ logits: MLMultiArray) throws -> CIImage {
+        guard logits.shape.count >= 4 else { throw SegmentationServiceError.failedToCreateMask }
+        let height = logits.shape[logits.shape.count - 2].intValue
+        let width = logits.shape[logits.shape.count - 1].intValue
+        let total = width * height
+        var values = [Float](repeating: 0, count: total)
+        let threshold: Float = 0.5
+        for idx in 0..<total {
+            let value = logits[idx].floatValue
+            let sigmoid = 1.0 / (1.0 + exp(-value))
+            values[idx] = sigmoid >= threshold ? 1.0 : 0.0
         }
-        let data = Data(bytes: buffer, count: array.count * MemoryLayout<Float>.size)
-        return CIImage(bitmapData: data,
-                       bytesPerRow: width * MemoryLayout<Float>.size,
-                       size: CGSize(width: width, height: height),
-                       format: .Rf,
-                       colorSpace: CGColorSpaceCreateDeviceGray())
+        let data = Data(bytes: values, count: values.count * MemoryLayout<Float>.size)
+        return CIImage(
+            bitmapData: data,
+            bytesPerRow: width * MemoryLayout<Float>.size,
+            size: CGSize(width: width, height: height),
+            format: .Rf,
+            colorSpace: CGColorSpaceCreateDeviceGray()
+        )
+    }
+
+    private func prepareInputBuffer(_ buffer: CVPixelBuffer) throws -> CVPixelBuffer {
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let desiredWidth = Int(targetImageSize.width)
+        let desiredHeight = Int(targetImageSize.height)
+        if width == desiredWidth, height == desiredHeight {
+            return buffer
+        }
+
+        var resized: CVPixelBuffer?
+        let attrs: [CFString: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true
+        ]
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            desiredWidth,
+            desiredHeight,
+            kCVPixelFormatType_32BGRA,
+            attrs as CFDictionary,
+            &resized
+        )
+        guard status == kCVReturnSuccess, let output = resized else {
+            throw SegmentationServiceError.invalidInput
+        }
+
+        let inputImage = CIImage(cvPixelBuffer: buffer)
+        let scaleX = targetImageSize.width / CGFloat(width)
+        let scaleY = targetImageSize.height / CGFloat(height)
+        let scaled = inputImage
+            .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+            .cropped(to: CGRect(origin: .zero, size: targetImageSize))
+        ciContext.render(scaled, to: output)
+        return output
+    }
+
+    private func convertBoxToPrompts(_ prompt: CGRect, originalSize: CGSize, inputImageSize: CGSize) throws -> MLMultiArray {
+        let coords = try MLMultiArray(shape: [1, 2, 2], dataType: .float32)
+        let sx = inputImageSize.width / max(originalSize.width, 1)
+        let sy = inputImageSize.height / max(originalSize.height, 1)
+        let topLeft = CGPoint(x: prompt.minX * sx, y: prompt.minY * sy)
+        let bottomRight = CGPoint(x: prompt.maxX * sx, y: prompt.maxY * sy)
+        coords[0] = NSNumber(value: Float(topLeft.x))
+        coords[1] = NSNumber(value: Float(topLeft.y))
+        coords[2] = NSNumber(value: Float(bottomRight.x))
+        coords[3] = NSNumber(value: Float(bottomRight.y))
+        return coords
+    }
+
+    private func boxPromptLabels() throws -> MLMultiArray {
+        let labels = try MLMultiArray(shape: [1, 2], dataType: .float32)
+        labels[0] = 2 // SAM box start token
+        labels[1] = 3 // SAM box end token
+        return labels
+    }
+
+    private func emptyMaskInput() throws -> MLMultiArray {
+        return try MLMultiArray(shape: [1, 1, NSNumber(value: maskResolution), NSNumber(value: maskResolution)], dataType: .float32)
+    }
+
+    private func originalImageSizeArray(_ size: CGSize) throws -> MLMultiArray {
+        let array = try MLMultiArray(shape: [2], dataType: .float32)
+        array[0] = NSNumber(value: Float(size.height))
+        array[1] = NSNumber(value: Float(size.width))
+        return array
     }
     #endif
 
