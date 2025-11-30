@@ -299,7 +299,7 @@ struct CameraPreviewView: View {
                 lastIncorrectLabelID: gameViewModel.lastIncorrectLabelID,
                 interactive: interactive,
                 showTargets: false,
-                frameProvider: { frame(for: $0, in: size) },
+                frameProvider: { boundingRect(for: $0, in: size) },
                 attemptMatch: { labelID, objectID in
                     gameViewModel.attemptMatch(labelID: labelID, on: objectID)
                 },
@@ -403,7 +403,7 @@ struct CameraPreviewView: View {
         return ZStack {
             if showDetections {
                 ForEach(detections) { detection in
-                    let rect = frame(for: detection, in: size)
+                    let rect = boundingRect(for: detection, in: size)
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(ColorPalette.accent.swiftUIColor.opacity(0.9), lineWidth: 2)
                         .background(
@@ -439,7 +439,42 @@ struct CameraPreviewView: View {
         .allowsHitTesting(false)
     }
 
-    @ViewBuilder
+    private func boundingRect(for detection: Detection, in viewSize: CGSize) -> CGRect {
+        boundingRect(forNormalizedRect: detection.boundingBox, in: viewSize)
+    }
+
+    private func boundingRect(for object: DetectedObject, in viewSize: CGSize) -> CGRect {
+        boundingRect(forNormalizedRect: object.boundingBox, in: viewSize)
+    }
+
+    private func boundingRect(forNormalizedRect normalizedRect: DetectionRect, in viewSize: CGSize) -> CGRect {
+        if let mapped = projectedRect(for: normalizedRect, inputImageSize: viewModel.inputImageSize, viewSize: viewSize) {
+            return mapped
+        }
+        return normalizedRect.rect(in: viewSize)
+    }
+
+    private func cameraFrameRect(in viewSize: CGSize) -> CGRect? {
+        projectedCameraFrameRect(inputImageSize: viewModel.inputImageSize, viewSize: viewSize)
+    }
+
+    private func requestSegmentationForCurrentRound() {
+        guard let round = gameViewModel.round else { return }
+        let grouped = Dictionary(grouping: viewModel.detections, by: { $0.label.lowercased() })
+        for object in round.objects {
+            let key = object.sourceLabel.lowercased()
+            guard let match = grouped[key]?.max(by: { $0.confidence < $1.confidence }) else { continue }
+            #if canImport(CoreImage)
+            if viewModel.segmentationMasks[match.id] == nil {
+                viewModel.requestSegmentation(for: match.id)
+            }
+            #else
+            viewModel.requestSegmentation(for: match.id)
+            #endif
+        }
+    }
+}
+
 private struct RoundPlayLayer: View {
     let round: Round
     let placedLabels: Set<GameKitLS.Label.ID>
@@ -678,43 +713,6 @@ private extension DetectionRect {
     }
 }
 
-private extension CameraPreviewView {
-    func frame(for detection: Detection, in viewSize: CGSize) -> CGRect {
-        frame(for: detection.boundingBox, in: viewSize)
-    }
-
-    func frame(for object: DetectedObject, in viewSize: CGSize) -> CGRect {
-        frame(for: object.boundingBox, in: viewSize)
-    }
-
-    func frame(for normalizedRect: DetectionRect, in viewSize: CGSize) -> CGRect {
-        if let rect = mappedRect(for: normalizedRect, inputImageSize: viewModel.inputImageSize, viewSize: viewSize) {
-            return rect
-        }
-        return normalizedRect.rect(in: viewSize)
-    }
-
-    func cameraFrameRect(in viewSize: CGSize) -> CGRect? {
-        mappedCameraFrameRect(inputImageSize: viewModel.inputImageSize, viewSize: viewSize)
-    }
-
-    private func requestSegmentationForCurrentRound() {
-        guard let round = gameViewModel.round else { return }
-        let grouped = Dictionary(grouping: viewModel.detections, by: { $0.label.lowercased() })
-        for object in round.objects {
-            let key = object.sourceLabel.lowercased()
-            guard let match = grouped[key]?.max(by: { $0.confidence < $1.confidence }) else { continue }
-            #if canImport(CoreImage)
-            if viewModel.segmentationMasks[match.id] == nil {
-                viewModel.requestSegmentation(for: match.id)
-            }
-            #else
-            viewModel.requestSegmentation(for: match.id)
-            #endif
-        }
-    }
-}
-
 private struct ARCameraView: UIViewRepresentable {
     let viewModel: DetectionVM
     let gameViewModel: LabelScrambleVM
@@ -827,7 +825,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         for (maskID, mask) in segmentationMasks {
             guard let detection = detectionLookup[maskID] else { continue }
             guard pendingLabels.contains(detection.label.lowercased()) else { continue }
-            guard let viewRect = mappedRect(for: detection.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size) else { continue }
+            guard let viewRect = projectedRect(for: detection.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size) else { continue }
             guard viewRect.width > 2, viewRect.height > 2 else { continue }
             guard let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView) else { continue }
             let depth = distanceFromCamera(to: raycastResult.worldTransform.translation, camera: frame.camera)
@@ -1070,12 +1068,12 @@ private final class MaskGlowTextureCache {
 }
 #endif
 
-private func mappedRect(
+private func projectedRect(
     for normalizedRect: DetectionRect,
     inputImageSize: CGSize?,
     viewSize: CGSize
 ) -> CGRect? {
-    guard let cameraRect = mappedCameraFrameRect(inputImageSize: inputImageSize, viewSize: viewSize) else {
+    guard let cameraRect = projectedCameraFrameRect(inputImageSize: inputImageSize, viewSize: viewSize) else {
         return nil
     }
     let dw = cameraRect.width
@@ -1087,7 +1085,7 @@ private func mappedRect(
     return CGRect(x: x, y: y, width: w, height: h)
 }
 
-private func mappedCameraFrameRect(inputImageSize: CGSize?, viewSize: CGSize) -> CGRect? {
+private func projectedCameraFrameRect(inputImageSize: CGSize?, viewSize: CGSize) -> CGRect? {
     guard let imgSize = inputImageSize, imgSize.width > 0, imgSize.height > 0 else {
         return nil
     }
@@ -1103,7 +1101,7 @@ private func mappedCameraFrameRect(inputImageSize: CGSize?, viewSize: CGSize) ->
     return CGRect(x: offsetX, y: offsetY, width: dw, height: dh)
 }
 
-private extension simd_float4x4 {
+fileprivate extension simd_float4x4 {
     var translation: SIMD3<Float> {
         SIMD3<Float>(columns.3.x, columns.3.y, columns.3.z)
     }
