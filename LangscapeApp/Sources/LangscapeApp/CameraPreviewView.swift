@@ -921,9 +921,9 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
                       let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView) else { continue }
 
                 let depth = distanceFromCamera(to: raycastResult.worldTransform.translation, camera: frame.camera)
-                guard let planeSize = planeSizeInMeters(for: snapshot.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera),
-                      let texture = textureCache.texture(for: maskID, mask: mask) else { continue }
+                guard let planeSize = planeSizeInMeters(for: snapshot.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera) else { continue }
 
+                let texture = textureCache.texture(for: maskID, mask: mask)
                 placeOverlay(
                     id: maskID,
                     texture: texture,
@@ -992,7 +992,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
 
     private func placeOverlay(
         id: UUID,
-        texture: TextureResource,
+        texture: TextureResource?,
         size: SIMD2<Float>,
         raycastResult: ARRaycastResult,
         camera: ARCamera,
@@ -1003,9 +1003,15 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         let mesh = MeshResource.generatePlane(width: width, height: height)
 
         var material = UnlitMaterial()
-        material.color = .init(tint: UIColor.systemCyan.withAlphaComponent(0.85))
-        let opacityTexture = MaterialParameters.Texture(texture)
-        material.blending = .transparent(opacity: .init(texture: opacityTexture))
+        let baseTint = UIColor.systemCyan
+        if let texture {
+            material.color = .init(tint: baseTint.withAlphaComponent(0.95))
+            let opacityTexture = MaterialParameters.Texture(texture)
+            material.blending = .transparent(opacity: .init(texture: opacityTexture))
+        } else {
+            material.color = .init(tint: baseTint.withAlphaComponent(0.5))
+            print("⚠️ Segmentation mask texture missing for \(id). Rendering solid debug plane.")
+        }
 
         let transform = Transform(matrix: raycastResult.worldTransform)
         let cameraPosition = camera.transform.translation

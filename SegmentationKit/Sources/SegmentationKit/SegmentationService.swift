@@ -93,7 +93,7 @@ public actor SegmentationService {
         self.logger = logger
 #if canImport(CoreML)
         let encoderConfiguration = MLModelConfiguration()
-        encoderConfiguration.computeUnits = .cpuAndGPU
+        encoderConfiguration.computeUnits = .all
         self.encoderConfiguration = encoderConfiguration
 
         let promptConfiguration = MLModelConfiguration()
@@ -101,7 +101,7 @@ public actor SegmentationService {
         self.promptConfiguration = promptConfiguration
 
         let decoderConfiguration = MLModelConfiguration()
-        decoderConfiguration.computeUnits = .cpuAndGPU
+        decoderConfiguration.computeUnits = .all
         self.decoderConfiguration = decoderConfiguration
 #endif
     }
@@ -524,19 +524,25 @@ public actor SegmentationService {
             y: clamp(samRect.maxY, upperBound: targetHeight)
         )
 
-        let coords = try MLMultiArray(shape: [1, 2, 2] as [NSNumber], dataType: .float16)
-        coords.withUnsafeMutableBufferPointer(ofType: Float16.self) { buffer, _ in
-            buffer[0] = Float16(Float(topLeft.x))
-            buffer[1] = Float16(Float(topLeft.y))
-            buffer[2] = Float16(Float(bottomRight.x))
-            buffer[3] = Float16(Float(bottomRight.y))
+        let pointCount = 5
+        let coords = try MLMultiArray(shape: [1, NSNumber(value: pointCount), 2], dataType: .float32)
+        coords.withUnsafeMutableBufferPointer(ofType: Float32.self) { buffer, _ in
+            buffer.initialize(repeating: 0)
+        }
+        let labels = try MLMultiArray(shape: [1, NSNumber(value: pointCount)], dataType: .int32)
+        labels.withUnsafeMutableBufferPointer(ofType: Int32.self) { buffer, _ in
+            buffer.initialize(repeating: -1)
         }
 
-        let labels = try MLMultiArray(shape: [1, 2] as [NSNumber], dataType: .float16)
-        labels.withUnsafeMutableBufferPointer(ofType: Float16.self) { buffer, _ in
-            buffer[0] = Float16(2)
-            buffer[1] = Float16(3)
+        let setPoint: (Int, CGPoint, Int32) -> Void = { index, point, label in
+            coords[[0, NSNumber(value: index), 0]] = NSNumber(value: Float(point.x))
+            coords[[0, NSNumber(value: index), 1]] = NSNumber(value: Float(point.y))
+            labels[[0, NSNumber(value: index)]] = NSNumber(value: label)
         }
+
+        setPoint(0, topLeft, 2)
+        setPoint(1, bottomRight, 3)
+        // Remaining three points stay padded at -1 / (0,0)
 
         return (coords, labels)
     }
