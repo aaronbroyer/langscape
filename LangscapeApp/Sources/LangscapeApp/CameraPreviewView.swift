@@ -32,7 +32,7 @@ struct CameraPreviewView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
-                ARCameraView(viewModel: viewModel, contextManager: contextManager)
+                ARCameraView(viewModel: viewModel, gameViewModel: gameViewModel, contextManager: contextManager)
                     .ignoresSafeArea()
 
                 overlays(in: proxy.size)
@@ -401,8 +401,6 @@ struct CameraPreviewView: View {
     private func detectionOverlay(for detections: [Detection], in size: CGSize) -> some View {
         print("CameraPreviewView.detectionOverlay: Rendering \(detections.count) detections, showDetections=\(showDetections)")
         return ZStack {
-            objectGlowLayer(in: size)
-            segmentationGlowLayer(in: size)
             if showDetections {
                 ForEach(detections) { detection in
                     let rect = frame(for: detection, in: size)
@@ -442,103 +440,6 @@ struct CameraPreviewView: View {
     }
 
     @ViewBuilder
-    private func segmentationGlowLayer(in size: CGSize) -> some View {
-        #if canImport(CoreImage)
-        if shouldShowSegmentationGlow,
-           !viewModel.segmentationMasks.isEmpty,
-           let cameraFrame = cameraFrameRect(in: size) {
-            ZStack {
-                ForEach(Array(viewModel.segmentationMasks.keys), id: \.self) { key in
-                    if let mask = viewModel.segmentationMasks[key],
-                       let image = neonGlowImage(for: mask) {
-                        Image(decorative: image, scale: 1.0)
-                            .resizable()
-                            .interpolation(.high)
-                            .frame(width: cameraFrame.width, height: cameraFrame.height)
-                            .position(x: cameraFrame.midX, y: cameraFrame.midY)
-                            .blendMode(.screen)
-                            .opacity(0.9)
-                    }
-                }
-            }
-            .frame(width: size.width, height: size.height)
-            .allowsHitTesting(false)
-            .transition(.opacity)
-        } else {
-            EmptyView()
-        }
-        #else
-        EmptyView()
-        #endif
-    }
-
-    @ViewBuilder
-    private func objectGlowLayer(in size: CGSize) -> some View {
-        if let round = gameViewModel.round,
-           [.ready, .playing, .paused].contains(gameViewModel.phase) {
-            let pendingIDs = pendingObjectIDs(for: round)
-            let targets = round.objects.filter { pendingIDs.contains($0.id) }
-            if targets.isEmpty {
-                EmptyView()
-            } else {
-                ZStack {
-                    ForEach(targets, id: \.id) { object in
-                        glowView(for: object, in: size)
-                    }
-                }
-                .frame(width: size.width, height: size.height)
-                .allowsHitTesting(false)
-                .animation(.easeInOut(duration: 0.18), value: targets.map(\.boundingBox))
-            }
-        } else {
-            EmptyView()
-        }
-    }
-
-    private func pendingObjectIDs(for round: Round) -> Set<DetectedObject.ID> {
-        let all = Set(round.objects.map(\.id))
-        guard !gameViewModel.placedLabels.isEmpty else { return all }
-        let matched = Set(gameViewModel.placedLabels.compactMap { round.target(for: $0) })
-        var pending = all
-        pending.subtract(matched)
-        return pending
-    }
-
-    private var shouldShowSegmentationGlow: Bool {
-        [.ready, .playing, .paused].contains(gameViewModel.phase)
-    }
-
-    @ViewBuilder
-    private func glowView(for object: DetectedObject, in size: CGSize) -> some View {
-        let rect = frame(for: object, in: size)
-        if rect.width <= 2 || rect.height <= 2 {
-            EmptyView()
-        } else {
-            let corner = min(rect.width, rect.height) * 0.25
-            let baseStroke = ColorPalette.accent.swiftUIColor
-
-            ZStack {
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .stroke(baseStroke.opacity(0.95), lineWidth: 2.5)
-                    .blur(radius: 0.8)
-
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .stroke(baseStroke.opacity(0.65), lineWidth: 8)
-                    .blur(radius: 6)
-
-                RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .stroke(baseStroke.opacity(0.35), lineWidth: 16)
-                    .blur(radius: 12)
-            }
-                .frame(width: rect.width, height: rect.height)
-                .position(x: rect.midX, y: rect.midY)
-                .blendMode(.screen)
-                .shadow(color: baseStroke.opacity(0.25), radius: 12)
-                .transition(.opacity.combined(with: .scale))
-        }
-    }
-}
-
 private struct RoundPlayLayer: View {
     let round: Round
     let placedLabels: Set<GameKitLS.Label.ID>
@@ -787,62 +688,15 @@ private extension CameraPreviewView {
     }
 
     func frame(for normalizedRect: DetectionRect, in viewSize: CGSize) -> CGRect {
-        if let rect = cameraFrameRect(in: viewSize) {
-            let dw = rect.width
-            let dh = rect.height
-            let x = rect.origin.x + CGFloat(normalizedRect.origin.x) * dw
-            let y = rect.origin.y + CGFloat(normalizedRect.origin.y) * dh
-            let w = CGFloat(normalizedRect.size.width) * dw
-            let h = CGFloat(normalizedRect.size.height) * dh
-            return CGRect(x: x, y: y, width: w, height: h)
+        if let rect = mappedRect(for: normalizedRect, inputImageSize: viewModel.inputImageSize, viewSize: viewSize) {
+            return rect
         }
         return normalizedRect.rect(in: viewSize)
     }
 
     func cameraFrameRect(in viewSize: CGSize) -> CGRect? {
-        guard let imgSize = viewModel.inputImageSize, imgSize.width > 0, imgSize.height > 0 else {
-            return nil
-        }
-        let sw = viewSize.width
-        let sh = viewSize.height
-        let iw = CGFloat(imgSize.width)
-        let ih = CGFloat(imgSize.height)
-        guard iw > 0, ih > 0 else { return nil }
-        let scale = max(sw / iw, sh / ih)
-        let dw = iw * scale
-        let dh = ih * scale
-        let offsetX = (sw - dw) / 2
-        let offsetY = (sh - dh) / 2
-        return CGRect(x: offsetX, y: offsetY, width: dw, height: dh)
+        mappedCameraFrameRect(inputImageSize: viewModel.inputImageSize, viewSize: viewSize)
     }
-
-    #if canImport(CoreImage)
-    func neonGlowImage(for mask: CIImage) -> CGImage? {
-        let normalized = mask
-            .applyingFilter("CIColorControls", parameters: ["inputBrightness": -0.08, "inputContrast": 1.35])
-        let alphaMask = normalized.applyingFilter("CIMaskToAlpha")
-        let edges = alphaMask
-            .clampedToExtent()
-            .applyingFilter("CIMorphologyGradient", parameters: ["inputRadius": 1.0])
-            .cropped(to: mask.extent)
-            .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": 4])
-            .cropped(to: mask.extent)
-
-        let tinted = edges.applyingFilter(
-            "CIFalseColor",
-            parameters: [
-                "inputColor0": CIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0),
-                "inputColor1": CIColor(red: 0.0, green: 1.0, blue: 1.0, alpha: 0.85)
-            ]
-        )
-
-        return CameraPreviewView.neonGlowContext.createCGImage(tinted, from: mask.extent)
-    }
-    #endif
-
-    #if canImport(CoreImage)
-    private static let neonGlowContext = CIContext()
-    #endif
 
     private func requestSegmentationForCurrentRound() {
         guard let round = gameViewModel.round else { return }
@@ -863,6 +717,7 @@ private extension CameraPreviewView {
 
 private struct ARCameraView: UIViewRepresentable {
     let viewModel: DetectionVM
+    let gameViewModel: LabelScrambleVM
     let contextManager: ContextManager
 
     func makeCoordinator() -> ARSessionCoordinator {
@@ -876,9 +731,24 @@ private struct ARCameraView: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: ARView, context: Context) {}
+    func updateUIView(_ uiView: ARView, context: Context) {
+#if canImport(CoreImage)
+        context.coordinator.updateWorldGlows(
+            arView: uiView,
+            phase: gameViewModel.phase,
+            round: gameViewModel.round,
+            placedLabels: gameViewModel.placedLabels,
+            detections: viewModel.detections,
+            segmentationMasks: viewModel.segmentationMasks,
+            inputImageSize: viewModel.inputImageSize
+        )
+#else
+        context.coordinator.clearAnchors(from: uiView)
+#endif
+    }
 
     static func dismantleUIView(_ uiView: ARView, coordinator: ARSessionCoordinator) {
+        coordinator.detach(from: uiView)
         uiView.session.pause()
     }
 }
@@ -886,8 +756,13 @@ private struct ARCameraView: UIViewRepresentable {
 private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
     private let viewModel: DetectionVM
     private let contextManager: ContextManager
+    private weak var arView: ARView?
     private var lastFrameTime: TimeInterval = 0
     private let logger = Logger.shared
+#if canImport(CoreImage)
+    private var glowOverlays: [UUID: GlowOverlay] = [:]
+    private let textureCache = MaskGlowTextureCache()
+#endif
 
     init(viewModel: DetectionVM, contextManager: ContextManager) {
         self.viewModel = viewModel
@@ -895,12 +770,183 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
     }
 
     func attach(to arView: ARView) {
+        self.arView = arView
         arView.session.delegate = self
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal, .vertical]
         arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         Task { await logger.log("AR session configured", level: .info, category: "LangscapeApp.Camera") }
     }
+
+    func detach(from arView: ARView) {
+#if canImport(CoreImage)
+        clearAnchors(from: arView)
+#endif
+        arView.session.delegate = nil
+        self.arView = nil
+    }
+
+    func clearAnchors(from arView: ARView) {
+#if canImport(CoreImage)
+        for overlay in glowOverlays.values {
+            overlay.anchor.removeFromParent()
+        }
+        glowOverlays.removeAll()
+        textureCache.removeAll()
+#endif
+    }
+
+#if canImport(CoreImage)
+    func updateWorldGlows(
+        arView: ARView,
+        phase: LabelScrambleVM.Phase,
+        round: Round?,
+        placedLabels: Set<GameKitLS.Label.ID>,
+        detections: [Detection],
+        segmentationMasks: [UUID: CIImage],
+        inputImageSize: CGSize?
+    ) {
+        guard shouldRenderGlows(for: phase), let round else {
+            clearAnchors(from: arView)
+            return
+        }
+        guard !segmentationMasks.isEmpty, let inputImageSize, let frame = arView.session.currentFrame else {
+            clearAnchors(from: arView)
+            return
+        }
+
+        let pendingLabels = pendingSourceLabels(in: round, placedLabels: placedLabels)
+        guard !pendingLabels.isEmpty else {
+            clearAnchors(from: arView)
+            return
+        }
+
+        let detectionLookup = Dictionary(uniqueKeysWithValues: detections.map { ($0.id, $0) })
+        var activeOverlayIDs: Set<UUID> = []
+
+        for (maskID, mask) in segmentationMasks {
+            guard let detection = detectionLookup[maskID] else { continue }
+            guard pendingLabels.contains(detection.label.lowercased()) else { continue }
+            guard let viewRect = mappedRect(for: detection.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size) else { continue }
+            guard viewRect.width > 2, viewRect.height > 2 else { continue }
+            guard let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView) else { continue }
+            let depth = distanceFromCamera(to: raycastResult.worldTransform.translation, camera: frame.camera)
+            guard let planeSize = planeSizeInMeters(for: detection.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera) else { continue }
+            guard let texture = textureCache.texture(for: maskID, mask: mask) else { continue }
+            placeOverlay(
+                id: maskID,
+                texture: texture,
+                size: planeSize,
+                raycastResult: raycastResult,
+                camera: frame.camera,
+                arView: arView
+            )
+            activeOverlayIDs.insert(maskID)
+        }
+
+        pruneInactiveOverlays(keeping: activeOverlayIDs)
+        textureCache.prune(keeping: activeOverlayIDs)
+    }
+
+    private func shouldRenderGlows(for phase: LabelScrambleVM.Phase) -> Bool {
+        switch phase {
+        case .ready, .playing, .paused:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func pendingSourceLabels(in round: Round, placedLabels: Set<GameKitLS.Label.ID>) -> Set<String> {
+        if placedLabels.isEmpty {
+            return Set(round.objects.map { $0.sourceLabel.lowercased() })
+        }
+        let satisfied = Set(placedLabels.compactMap { round.target(for: $0) })
+        return Set(round.objects.filter { !satisfied.contains($0.id) }.map { $0.sourceLabel.lowercased() })
+    }
+
+    private func raycast(at point: CGPoint, in arView: ARView) -> ARRaycastResult? {
+        if let query = arView.makeRaycastQuery(from: point, allowing: .existingPlaneGeometry, alignment: .any),
+           let result = arView.session.raycast(query).first {
+            return result
+        }
+        if let estimatedQuery = arView.makeRaycastQuery(from: point, allowing: .estimatedPlane, alignment: .any),
+           let fallback = arView.session.raycast(estimatedQuery).first {
+            return fallback
+        }
+        return nil
+    }
+
+    private func distanceFromCamera(to position: SIMD3<Float>, camera: ARCamera) -> Float {
+        let cameraPosition = camera.transform.translation
+        return simd_length(position - cameraPosition)
+    }
+
+    private func planeSizeInMeters(
+        for boundingBox: DetectionRect,
+        depth: Float,
+        inputImageSize: CGSize,
+        camera: ARCamera
+    ) -> SIMD2<Float>? {
+        guard depth > 0 else { return nil }
+        let fx = Float(camera.intrinsics.columns.0.x)
+        let fy = Float(camera.intrinsics.columns.1.y)
+        guard fx > 0, fy > 0 else { return nil }
+        let pixelWidth = Float(boundingBox.size.width) * Float(inputImageSize.width)
+        let pixelHeight = Float(boundingBox.size.height) * Float(inputImageSize.height)
+        let widthMeters = max(0.01, (pixelWidth / fx) * depth)
+        let heightMeters = max(0.01, (pixelHeight / fy) * depth)
+        return SIMD2<Float>(widthMeters, heightMeters)
+    }
+
+    private func placeOverlay(
+        id: UUID,
+        texture: TextureResource,
+        size: SIMD2<Float>,
+        raycastResult: ARRaycastResult,
+        camera: ARCamera,
+        arView: ARView
+    ) {
+        let mesh = MeshResource.generatePlane(width: size.x, height: size.y)
+        let matTexture = MaterialParameters.Texture(texture)
+        var material = UnlitMaterial(color: .white)
+        material.color = .init(tint: UIColor.white, texture: matTexture)
+
+        let transform = Transform(matrix: raycastResult.worldTransform)
+        let cameraPosition = camera.transform.translation
+
+        if let overlay = glowOverlays[id] {
+            overlay.anchor.transform = transform
+            overlay.entity.model = ModelComponent(mesh: mesh, materials: [material])
+            overlay.entity.look(at: cameraPosition, from: transform.translation, relativeTo: nil)
+        } else {
+            let anchor = AnchorEntity(world: raycastResult.worldTransform)
+            let entity = ModelEntity(mesh: mesh, materials: [material])
+            entity.look(at: cameraPosition, from: transform.translation, relativeTo: nil)
+            anchor.addChild(entity)
+            arView.scene.addAnchor(anchor)
+            glowOverlays[id] = GlowOverlay(anchor: anchor, entity: entity)
+        }
+    }
+
+    private func pruneInactiveOverlays(keeping activeIDs: Set<UUID>) {
+        guard !activeIDs.isEmpty else {
+            for overlay in glowOverlays.values {
+                overlay.anchor.removeFromParent()
+            }
+            glowOverlays.removeAll()
+            return
+        }
+
+        let stale = glowOverlays.keys.filter { !activeIDs.contains($0) }
+        for id in stale {
+            if let overlay = glowOverlays[id] {
+                overlay.anchor.removeFromParent()
+            }
+            glowOverlays.removeValue(forKey: id)
+        }
+    }
+#endif
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let now = Date().timeIntervalSince1970
@@ -940,6 +986,126 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
 
     func sessionInterruptionEnded(_ session: ARSession) {
         Task { await logger.log("AR session interruption ended", level: .info, category: "LangscapeApp.Camera") }
+    }
+}
+
+#if canImport(CoreImage)
+private struct GlowOverlay {
+    let anchor: AnchorEntity
+    let entity: ModelEntity
+}
+
+private final class MaskGlowTextureCache {
+    private let ciContext = CIContext()
+    private var cache: [UUID: TextureResource] = [:]
+    private let options = TextureResource.CreateOptions(semantic: .color)
+    private static let edgeGlowKernel: CIColorKernel? = {
+        let kernel = """
+        kernel vec4 edgeGlow(sampler maskSampler) {
+            vec2 coord = destCoord();
+            float center = clamp(sample(maskSampler, samplerCoord(maskSampler, coord)).a, 0.0, 1.0);
+            float north = sample(maskSampler, samplerCoord(maskSampler, coord + vec2(0.0, -1.0))).a;
+            float south = sample(maskSampler, samplerCoord(maskSampler, coord + vec2(0.0, 1.0))).a;
+            float east = sample(maskSampler, samplerCoord(maskSampler, coord + vec2(1.0, 0.0))).a;
+            float west = sample(maskSampler, samplerCoord(maskSampler, coord + vec2(-1.0, 0.0))).a;
+            float maxNeighbor = max(max(north, south), max(east, west));
+            float diff = max(0.0, maxNeighbor - center);
+            float edge = smoothstep(0.02, 0.25, diff);
+            return vec4(0.0, 0.0, 0.0, edge);
+        }
+        """
+        return CIColorKernel(source: kernel)
+    }()
+
+    func texture(for id: UUID, mask: CIImage) -> TextureResource? {
+        if let cached = cache[id] {
+            return cached
+        }
+        guard let glowImage = makeGlowImage(from: mask),
+              let texture = try? TextureResource.generate(from: glowImage, options: options) else {
+            return nil
+        }
+        cache[id] = texture
+        return texture
+    }
+
+    func prune(keeping ids: Set<UUID>) {
+        guard !ids.isEmpty else {
+            cache.removeAll()
+            return
+        }
+        cache = cache.filter { ids.contains($0.key) }
+    }
+
+    func removeAll() {
+        cache.removeAll()
+    }
+
+    private func makeGlowImage(from mask: CIImage) -> CGImage? {
+        let normalized = mask
+            .applyingFilter("CIColorControls", parameters: ["inputBrightness": -0.08, "inputContrast": 1.35])
+        let alphaMask = normalized.applyingFilter("CIMaskToAlpha")
+        let edgeMask = MaskGlowTextureCache.edgeGlowKernel?
+            .apply(extent: alphaMask.extent, arguments: [alphaMask]) ?? alphaMask
+        let glow = edgeMask
+            .clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": 2.0])
+            .cropped(to: mask.extent)
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1.6),
+                "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: -0.05)
+            ])
+        let tinted = glow.applyingFilter(
+            "CIFalseColor",
+            parameters: [
+                "inputColor0": CIColor(red: 0, green: 0, blue: 0, alpha: 0),
+                "inputColor1": CIColor(red: 0, green: 1, blue: 1, alpha: 0.9)
+            ]
+        )
+        return ciContext.createCGImage(tinted, from: mask.extent)
+    }
+}
+#endif
+
+private func mappedRect(
+    for normalizedRect: DetectionRect,
+    inputImageSize: CGSize?,
+    viewSize: CGSize
+) -> CGRect? {
+    guard let cameraRect = mappedCameraFrameRect(inputImageSize: inputImageSize, viewSize: viewSize) else {
+        return nil
+    }
+    let dw = cameraRect.width
+    let dh = cameraRect.height
+    let x = cameraRect.origin.x + CGFloat(normalizedRect.origin.x) * dw
+    let y = cameraRect.origin.y + CGFloat(normalizedRect.origin.y) * dh
+    let w = CGFloat(normalizedRect.size.width) * dw
+    let h = CGFloat(normalizedRect.size.height) * dh
+    return CGRect(x: x, y: y, width: w, height: h)
+}
+
+private func mappedCameraFrameRect(inputImageSize: CGSize?, viewSize: CGSize) -> CGRect? {
+    guard let imgSize = inputImageSize, imgSize.width > 0, imgSize.height > 0 else {
+        return nil
+    }
+    let sw = viewSize.width
+    let sh = viewSize.height
+    let iw = CGFloat(imgSize.width)
+    let ih = CGFloat(imgSize.height)
+    let scale = max(sw / iw, sh / ih)
+    let dw = iw * scale
+    let dh = ih * scale
+    let offsetX = (sw - dw) / 2
+    let offsetY = (sh - dh) / 2
+    return CGRect(x: offsetX, y: offsetY, width: dw, height: dh)
+}
+
+private extension simd_float4x4 {
+    var translation: SIMD3<Float> {
+        SIMD3<Float>(columns.3.x, columns.3.y, columns.3.z)
     }
 }
 

@@ -273,6 +273,17 @@ public actor SegmentationService {
             }
         }
         let data = Data(bytes: values, count: values.count * MemoryLayout<Float>.size)
+#if canImport(CoreImage)
+        if let refined = upscaleAndThresholdMask(
+            data: data,
+            sourceSize: CGSize(width: width, height: height),
+            targetRect: expandedPrompt,
+            fullSize: fullSize
+        ) {
+            let flip = CGAffineTransform(translationX: 0, y: refined.extent.height).scaledBy(x: 1, y: -1)
+            return refined.transformed(by: flip)
+        }
+#endif
         var maskImage = CIImage(
             bitmapData: data,
             bytesPerRow: width * MemoryLayout<Float>.size,
@@ -285,10 +296,11 @@ public actor SegmentationService {
         if scaleX > 0, scaleY > 0 {
             maskImage = maskImage.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
         }
-        maskImage = maskImage.cropped(to: CGRect(origin: .zero, size: fullSize))
+        maskImage = maskImage
+            .transformed(by: CGAffineTransform(translationX: expandedPrompt.minX, y: expandedPrompt.minY))
+            .cropped(to: CGRect(origin: .zero, size: fullSize))
         let flip = CGAffineTransform(translationX: 0, y: maskImage.extent.height).scaledBy(x: 1, y: -1)
-        maskImage = maskImage.transformed(by: flip)
-        return maskImage
+        return maskImage.transformed(by: flip)
     }
 
     private func prepareInputBuffer(_ buffer: CVPixelBuffer) throws -> CVPixelBuffer {
@@ -437,5 +449,45 @@ private extension MLModelDescription {
         }
         return multiArrayInputKey
     }
+}
+#endif
+
+#if canImport(CoreImage)
+private func upscaleAndThresholdMask(
+    data: Data,
+    sourceSize: CGSize,
+    targetRect: CGRect,
+    fullSize: CGSize
+) -> CIImage? {
+    guard sourceSize.width > 0, sourceSize.height > 0 else { return nil }
+    let base = CIImage(
+        bitmapData: data,
+        bytesPerRow: Int(sourceSize.width) * MemoryLayout<Float>.size,
+        size: sourceSize,
+        format: .Rf,
+        colorSpace: CGColorSpaceCreateDeviceGray()
+    )
+    let scaleX = max(targetRect.width, 1) / max(sourceSize.width, 1)
+    let scaleY = max(targetRect.height, 1) / max(sourceSize.height, 1)
+    let lanczosScale = max(scaleY, 0.0001)
+    let aspect = max(lanczosScale / max(scaleX, 0.0001), 0.0001)
+    var result = base.applyingFilter(
+        "CILanczosScaleTransform",
+        parameters: [
+            kCIInputScaleKey: lanczosScale,
+            kCIInputAspectRatioKey: aspect
+        ]
+    )
+    if let threshold = CIFilter(name: "CIColorMatrix") {
+        threshold.setValue(result, forKey: kCIInputImageKey)
+        threshold.setValue(CIVector(x: 0, y: 0, z: 0, w: 20), forKey: "inputAVector")
+        threshold.setValue(CIVector(x: 0, y: 0, z: 0, w: -10), forKey: "inputBiasVector")
+        if let output = threshold.outputImage {
+            result = output
+        }
+    }
+    result = result.cropped(to: CGRect(origin: .zero, size: targetRect.size))
+    result = result.transformed(by: CGAffineTransform(translationX: targetRect.minX, y: targetRect.minY))
+    return result.cropped(to: CGRect(origin: .zero, size: fullSize))
 }
 #endif
