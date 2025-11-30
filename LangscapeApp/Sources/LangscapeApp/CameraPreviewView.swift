@@ -58,6 +58,9 @@ struct CameraPreviewView: View {
                     gameViewModel.presentFatalError()
                 }
             }
+            .onChange(of: gameViewModel.round) { _, _ in
+                requestSegmentationForCurrentRound()
+            }
         }
         .overlay(alignment: .topLeading) {
             contextBadge
@@ -73,14 +76,16 @@ struct CameraPreviewView: View {
             case .home:
                 homeOverlay
             case .scanning:
-                if showDetections { detectionOverlay(for: viewModel.detections, in: size) }
+                detectionOverlay(for: viewModel.detections, in: size)
                 scanningIndicator
             case .ready:
-                if showDetections { detectionOverlay(for: viewModel.detections, in: size) }
+                detectionOverlay(for: viewModel.detections, in: size)
                 startButton
             case .playing:
+                detectionOverlay(for: viewModel.detections, in: size)
                 roundOverlay(in: size, interactive: true)
             case .paused:
+                detectionOverlay(for: viewModel.detections, in: size)
                 roundOverlay(in: size, interactive: false)
             case .completed:
                 EmptyView()
@@ -344,12 +349,14 @@ struct CameraPreviewView: View {
             startPulseAnimation()
             print("CameraPreviewView: State .ready - showing detections")
             withAnimation(.easeInOut(duration: 0.2)) { showDetections = true }
+            requestSegmentationForCurrentRound()
         case .scanning:
             print("CameraPreviewView: State .scanning - showing detections")
             withAnimation(.easeInOut(duration: 0.2)) { showDetections = true }
         case .playing, .paused:
             print("CameraPreviewView: State .playing/.paused - HIDING detections")
             withAnimation(.easeInOut(duration: 0.2)) { showDetections = false }
+            requestSegmentationForCurrentRound()
         default:
             if startPulse {
                 withAnimation(.easeInOut(duration: 0.25)) {
@@ -389,30 +396,38 @@ struct CameraPreviewView: View {
         print("CameraPreviewView.detectionOverlay: Rendering \(detections.count) detections, showDetections=\(showDetections)")
         return ZStack {
             segmentationGlowLayer(in: size)
-            ForEach(detections) { detection in
-                let rect = frame(for: detection, in: size)
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(ColorPalette.accent.swiftUIColor.opacity(0.9), lineWidth: 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.black.opacity(0.18))
-                    )
-                    .frame(width: rect.width, height: rect.height)
-                    .overlay(alignment: .topLeading) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(detection.label.capitalized)
-                                .font(Typography.caption.font.weight(.semibold))
-                                .foregroundStyle(Color.white)
+            if showDetections {
+                ForEach(detections) { detection in
+                    let rect = frame(for: detection, in: size)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(ColorPalette.accent.swiftUIColor.opacity(0.9), lineWidth: 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.black.opacity(0.18))
+                        )
+                        .frame(width: rect.width, height: rect.height)
+                        .overlay(alignment: .topLeading) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(detection.label.capitalized)
+                                    .font(Typography.caption.font.weight(.semibold))
+                                    .foregroundStyle(Color.white)
 
-                            Text("\(Int(detection.confidence * 100))%")
-                                .font(Typography.caption.font)
-                                .foregroundStyle(Color.white.opacity(0.75))
+                                Text("\(Int(detection.confidence * 100))%")
+                                    .font(Typography.caption.font)
+                                    .foregroundStyle(Color.white.opacity(0.75))
+                            }
+                            .padding(Spacing.xSmall.cgFloat)
+                            .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .offset(x: 6, y: 6)
                         }
-                        .padding(Spacing.xSmall.cgFloat)
-                        .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .offset(x: 6, y: 6)
-                    }
-                    .position(x: rect.midX, y: rect.midY)
+                        .position(x: rect.midX, y: rect.midY)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            viewModel.requestSegmentation(for: detection.id)
+                        }
+                }
+            } else {
+                Color.clear
             }
         }
         .frame(width: size.width, height: size.height)
@@ -748,6 +763,16 @@ private extension CameraPreviewView {
     #if canImport(CoreImage)
     private static let neonGlowContext = CIContext()
     #endif
+
+    private func requestSegmentationForCurrentRound() {
+        guard let round = gameViewModel.round else { return }
+        let grouped = Dictionary(grouping: viewModel.detections, by: { $0.label.lowercased() })
+        for object in round.objects {
+            let key = object.sourceLabel.lowercased()
+            guard let match = grouped[key]?.max(by: { $0.confidence < $1.confidence }) else { continue }
+            viewModel.requestSegmentation(for: match.id)
+        }
+    }
 }
 
 private struct ARCameraView: UIViewRepresentable {

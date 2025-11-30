@@ -69,6 +69,7 @@ public final class DetectionVM: ObservableObject {
 #if canImport(SegmentationKit) && canImport(CoreVideo)
     private let segmentationService: SegmentationService?
     private var pendingSegmentationDetections: Set<UUID> = []
+    private var userRequestedSegmentationIDs: Set<UUID> = []
     private let segmentationConfidenceGate: Double = 0.85
 #endif
 
@@ -183,6 +184,12 @@ public final class DetectionVM: ObservableObject {
         }
     }
 
+#if canImport(SegmentationKit) && canImport(CoreVideo)
+    public func requestSegmentation(for detectionID: UUID) {
+        userRequestedSegmentationIDs.insert(detectionID)
+    }
+#endif
+
     private func startAuxiliaryModelLoad(geminiAPIKey: String?) {
         auxiliaryLoadTask?.cancel()
         let logger = self.logger
@@ -232,19 +239,25 @@ public final class DetectionVM: ObservableObject {
     @MainActor
     private func evaluateSegmentationTriggers(_ detections: [Detection], pixelBuffer: CVPixelBuffer, timestamp: Date) {
         guard let service = segmentationService else { return }
-        guard let candidate = detections.first(where: { $0.confidence >= segmentationConfidenceGate }) else { return }
-        if pendingSegmentationDetections.contains(candidate.id) { return }
-        pendingSegmentationDetections.insert(candidate.id)
+        let candidate = detections.first(where: { userRequestedSegmentationIDs.contains($0.id) })
+            ?? detections.first(where: { $0.confidence >= segmentationConfidenceGate })
+        guard let target = candidate else { return }
+        if pendingSegmentationDetections.contains(target.id) { return }
+        let wasUserRequested = userRequestedSegmentationIDs.contains(target.id)
+        if wasUserRequested {
+            userRequestedSegmentationIDs.remove(target.id)
+        }
+        pendingSegmentationDetections.insert(target.id)
 
-        let prompt = promptRect(for: candidate.boundingBox, pixelBuffer: pixelBuffer)
+        let prompt = promptRect(for: target.boundingBox, pixelBuffer: pixelBuffer)
         let request = SegmentationRequest(
             pixelBuffer: pixelBuffer,
             prompt: prompt,
             imageSize: CGSize(width: width, height: height),
             timestamp: timestamp.timeIntervalSince1970
         )
-        let detectionID = candidate.id
-        let detectionLabel = candidate.label
+        let detectionID = target.id
+        let detectionLabel = target.label
 
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
