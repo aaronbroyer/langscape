@@ -19,7 +19,11 @@ let package = Package(
     targets: [
         .target(
             name: "SegmentationKit",
-            dependencies: ["Utilities"]
+            dependencies: ["Utilities"],
+            resources: [
+                .copy("Resources/SAM2_1SmallImageEncoderFLOAT16.mlpackage"),
+                .copy("Resources/SAM2_1SmallMaskDecoderFLOAT16.mlpackage")
+            ]
         ),
         .testTarget(
             name: "SegmentationKitTests",

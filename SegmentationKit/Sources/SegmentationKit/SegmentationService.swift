@@ -78,8 +78,8 @@ public actor SegmentationService {
         if encoder != nil, decoder != nil { return }
 
         let bundle = Bundle.module
-        self.encoder = try await loadModel(named: "SAM2ImageEncoder", in: bundle)
-        self.decoder = try await loadModel(named: "SAM2MaskDecoder", in: bundle)
+        self.encoder = try await loadModel(named: "SAM2_1SmallImageEncoderFLOAT16", in: bundle)
+        self.decoder = try await loadModel(named: "SAM2_1SmallMaskDecoderFLOAT16", in: bundle)
         #else
         throw SegmentationServiceError.unsupportedPlatform
         #endif
@@ -252,17 +252,15 @@ public actor SegmentationService {
         let sy = inputImageSize.height / max(originalSize.height, 1)
         let topLeft = CGPoint(x: prompt.minX * sx, y: prompt.minY * sy)
         let bottomRight = CGPoint(x: prompt.maxX * sx, y: prompt.maxY * sy)
-        coords[0] = NSNumber(value: Float(topLeft.x))
-        coords[1] = NSNumber(value: Float(topLeft.y))
-        coords[2] = NSNumber(value: Float(bottomRight.x))
-        coords[3] = NSNumber(value: Float(bottomRight.y))
+        setCoords(coords, batch: 0, point: 0, x: Float(topLeft.x), y: Float(topLeft.y))
+        setCoords(coords, batch: 0, point: 1, x: Float(bottomRight.x), y: Float(bottomRight.y))
         return coords
     }
 
     private func boxPromptLabels() throws -> MLMultiArray {
         let labels = try MLMultiArray(shape: [1, 2], dataType: .float32)
-        labels[0] = 2 // SAM box start token
-        labels[1] = 3 // SAM box end token
+        setLabel(labels, batch: 0, index: 0, value: 2)
+        setLabel(labels, batch: 0, index: 1, value: 3)
         return labels
     }
 
@@ -275,6 +273,15 @@ public actor SegmentationService {
         array[0] = NSNumber(value: Float(size.height))
         array[1] = NSNumber(value: Float(size.width))
         return array
+    }
+
+    private func setCoords(_ array: MLMultiArray, batch: Int, point: Int, x: Float, y: Float) {
+        array[[NSNumber(value: batch), NSNumber(value: point), NSNumber(value: 0)]] = NSNumber(value: x)
+        array[[NSNumber(value: batch), NSNumber(value: point), NSNumber(value: 1)]] = NSNumber(value: y)
+    }
+
+    private func setLabel(_ array: MLMultiArray, batch: Int, index: Int, value: Float) {
+        array[[NSNumber(value: batch), NSNumber(value: index)]] = NSNumber(value: value)
     }
     #endif
 
