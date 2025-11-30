@@ -184,8 +184,13 @@ public actor SegmentationService {
             }
 
             await logger.log("SegmentationService: converting box to prompts...", level: .debug, category: "SegmentationKit.SAM")
-            let promptPoints = try convertBoxToPrompts(request.prompt, originalSize: request.imageSize, inputImageSize: inputImageSize)
-            let promptLabels = try boxPromptLabels()
+            let promptData = try convertBoxToPrompts(
+                request.prompt,
+                originalSize: request.imageSize,
+                inputImageSize: inputImageSize
+            )
+            let promptPoints = promptData.points
+            let promptLabels = promptData.labels
             await logger.log("SegmentationService: running prompt encoder...", level: .debug, category: "SegmentationKit.SAM")
             let promptEmbeddings = try runPromptEncoder(points: promptPoints, labels: promptLabels, promptEncoder: promptEncoder)
             await logger.log("SegmentationService: prompt encoder completed", level: .debug, category: "SegmentationKit.SAM")
@@ -424,42 +429,67 @@ public actor SegmentationService {
         return output
     }
 
-    private func convertBoxToPrompts(_ prompt: CGRect, originalSize: CGSize, inputImageSize: CGSize) throws -> MLMultiArray {
-        let sx = inputImageSize.width / max(originalSize.width, 1)
-        let sy = inputImageSize.height / max(originalSize.height, 1)
+    private func convertBoxToPrompts(
+        _ prompt: CGRect,
+        originalSize: CGSize,
+        inputImageSize: CGSize
+    ) throws -> (points: MLMultiArray, labels: MLMultiArray) {
+        let safeOriginal = CGSize(
+            width: max(originalSize.width, 1),
+            height: max(originalSize.height, 1)
+        )
+        let normalized = CGRect(
+            x: prompt.minX / safeOriginal.width,
+            y: prompt.minY / safeOriginal.height,
+            width: prompt.width / safeOriginal.width,
+            height: prompt.height / safeOriginal.height
+        )
+        let minX = min(max(normalized.minX, 0), 1)
+        let minY = min(max(normalized.minY, 0), 1)
+        let maxX = min(max(normalized.maxX, 0), 1)
+        let maxY = min(max(normalized.maxY, 0), 1)
+        let clampedNormalized = CGRect(
+            x: minX,
+            y: minY,
+            width: max(maxX - minX, 0.001),
+            height: max(maxY - minY, 0.001)
+        )
 
-        let topLeft = clamp(point: CGPoint(x: prompt.minX * sx, y: prompt.minY * sy), maxSize: inputImageSize)
-        let bottomRight = clamp(point: CGPoint(x: prompt.maxX * sx, y: prompt.maxY * sy), maxSize: inputImageSize)
+        let targetWidth = max(inputImageSize.width, 1)
+        let targetHeight = max(inputImageSize.height, 1)
+        let padding: CGFloat = 10
+        var samRect = CGRect(
+            x: clampedNormalized.minX * targetWidth,
+            y: clampedNormalized.minY * targetHeight,
+            width: clampedNormalized.width * targetWidth,
+            height: clampedNormalized.height * targetHeight
+        ).insetBy(dx: -padding, dy: -padding)
 
-        let array = try MLMultiArray(shape: [1, 2, 2] as [NSNumber], dataType: .float16)
-        array.withUnsafeMutableBufferPointer(ofType: Float16.self) { buffer, _ in
-            buffer.initialize(repeating: Float16(0))
-            buffer[0] = Float16(Float(topLeft.x))
-            buffer[1] = Float16(Float(topLeft.y))
-            buffer[2] = Float16(Float(bottomRight.x))
-            buffer[3] = Float16(Float(bottomRight.y))
-        }
-        return array
-    }
-
-    private func boxPromptLabels() throws -> MLMultiArray {
-        let array = try MLMultiArray(shape: [1, 2] as [NSNumber], dataType: .float16)
-        array.withUnsafeMutableBufferPointer(ofType: Float16.self) { buffer, _ in
-            buffer[0] = Float16(2)
-            buffer[1] = Float16(3)
-        }
-        return array
-    }
-
-    private func clamp(point: CGPoint, maxSize: CGSize) -> CGPoint {
         func clamp(_ value: CGFloat, upperBound: CGFloat) -> CGFloat {
             guard upperBound > 0 else { return 0 }
             return min(max(value, 0), upperBound - 1)
         }
-        return CGPoint(
-            x: clamp(point.x, upperBound: maxSize.width),
-            y: clamp(point.y, upperBound: maxSize.height)
+
+        let topLeft = CGPoint(
+            x: clamp(samRect.minX, upperBound: targetWidth),
+            y: clamp(samRect.minY, upperBound: targetHeight)
         )
+        let bottomRight = CGPoint(
+            x: clamp(samRect.maxX, upperBound: targetWidth),
+            y: clamp(samRect.maxY, upperBound: targetHeight)
+        )
+
+        let coords = try MLMultiArray(shape: [1, 2, 2] as [NSNumber], dataType: .float32)
+        coords[[0, 0, 0] as [NSNumber]] = NSNumber(value: Float(topLeft.x))
+        coords[[0, 0, 1] as [NSNumber]] = NSNumber(value: Float(topLeft.y))
+        coords[[0, 1, 0] as [NSNumber]] = NSNumber(value: Float(bottomRight.x))
+        coords[[0, 1, 1] as [NSNumber]] = NSNumber(value: Float(bottomRight.y))
+
+        let labels = try MLMultiArray(shape: [1, 2] as [NSNumber], dataType: .int32)
+        labels[[0, 0] as [NSNumber]] = NSNumber(value: 2)
+        labels[[0, 1] as [NSNumber]] = NSNumber(value: 3)
+
+        return (coords, labels)
     }
 
     #endif
