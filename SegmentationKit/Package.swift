@@ -22,7 +22,8 @@ let package = Package(
             dependencies: ["Utilities"],
             resources: [
                 .copy("Resources/SAM2_1SmallImageEncoderFLOAT16.mlpackage"),
-                .copy("Resources/SAM2_1SmallMaskDecoderFLOAT16.mlpackage")
+                .copy("Resources/SAM2_1SmallMaskDecoderFLOAT16.mlpackage"),
+                .copy("Resources/SAM2_1SmallPromptEncoderFLOAT16.mlpackage")
             ]
         ),
         .testTarget(

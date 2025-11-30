@@ -743,16 +743,18 @@ private extension CameraPreviewView {
 
     #if canImport(CoreImage)
     func neonGlowImage(for mask: CIImage) -> CGImage? {
-        let blurred = mask
+        let edges = mask
             .clampedToExtent()
-            .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": 20])
+            .applyingFilter("CIMorphologyGradient", parameters: ["inputRadius": 2])
+            .cropped(to: mask.extent)
+            .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": 6])
             .cropped(to: mask.extent)
 
-        let tinted = blurred.applyingFilter(
+        let tinted = edges.applyingFilter(
             "CIFalseColor",
             parameters: [
-                "inputColor0": CIColor(red: 0.0, green: 1.0, blue: 1.0, alpha: 0.95),
-                "inputColor1": CIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0)
+                "inputColor0": CIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0),
+                "inputColor1": CIColor(red: 0.0, green: 1.0, blue: 1.0, alpha: 0.85)
             ]
         )
 

@@ -71,6 +71,7 @@ public final class DetectionVM: ObservableObject {
     private var pendingSegmentationDetections: Set<UUID> = []
     private var userRequestedSegmentationIDs: Set<UUID> = []
     private let segmentationConfidenceGate: Double = 0.85
+    private let segmentationAreaGate: Double = 0.35
 #endif
 
     public init(
@@ -148,6 +149,10 @@ public final class DetectionVM: ObservableObject {
                 await MainActor.run {
                     viewModel.detections = detections
                     viewModel.lastError = nil
+#if canImport(CoreImage)
+                    let activeIDs = Set(detections.map { $0.id })
+                    viewModel.segmentationMasks = viewModel.segmentationMasks.filter { activeIDs.contains($0.key) }
+#endif
                     viewModel.registerFrame(timestamp: request.timestamp)
                 }
                 await logger.log("Processed frame \(request.id) with \(countForLog) detections: [\(labelsForLog)]", level: .debug, category: "DetectionKit.DetectionVM")
@@ -240,7 +245,9 @@ public final class DetectionVM: ObservableObject {
     private func evaluateSegmentationTriggers(_ detections: [Detection], pixelBuffer: CVPixelBuffer, timestamp: Date) {
         guard let service = segmentationService else { return }
         let candidate = detections.first(where: { userRequestedSegmentationIDs.contains($0.id) })
-            ?? detections.first(where: { $0.confidence >= segmentationConfidenceGate })
+            ?? detections.first(where: {
+                $0.confidence >= segmentationConfidenceGate && boundingBoxArea($0.boundingBox) <= segmentationAreaGate
+            })
         guard let target = candidate else { return }
         if pendingSegmentationDetections.contains(target.id) { return }
         let wasUserRequested = userRequestedSegmentationIDs.contains(target.id)
@@ -291,6 +298,12 @@ public final class DetectionVM: ObservableObject {
         let w = CGFloat(boundingBox.size.width) * width
         let h = CGFloat(boundingBox.size.height) * height
         return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    private func boundingBoxArea(_ rect: NormalizedRect) -> Double {
+        let clampedWidth = max(0, min(1, rect.size.width))
+        let clampedHeight = max(0, min(1, rect.size.height))
+        return clampedWidth * clampedHeight
     }
 #endif
 
