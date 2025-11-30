@@ -27,7 +27,7 @@ struct CameraPreviewView: View {
     @State private var showCompletionFlash = false
     @State private var homeCardPressed = false
     @State private var startPulse = false
-    @State private var showDetections = true
+    @State private var showDetections = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -347,12 +347,12 @@ struct CameraPreviewView: View {
             }
         case .ready:
             startPulseAnimation()
-            print("CameraPreviewView: State .ready - showing detections")
-            withAnimation(.easeInOut(duration: 0.2)) { showDetections = true }
+            print("CameraPreviewView: State .ready - hiding detections")
+            withAnimation(.easeInOut(duration: 0.2)) { showDetections = false }
             requestSegmentationForCurrentRound()
         case .scanning:
-            print("CameraPreviewView: State .scanning - showing detections")
-            withAnimation(.easeInOut(duration: 0.2)) { showDetections = true }
+            print("CameraPreviewView: State .scanning - hiding detections")
+            withAnimation(.easeInOut(duration: 0.2)) { showDetections = false }
         case .playing, .paused:
             print("CameraPreviewView: State .playing/.paused - HIDING detections")
             withAnimation(.easeInOut(duration: 0.2)) { showDetections = false }
@@ -438,7 +438,9 @@ struct CameraPreviewView: View {
     @ViewBuilder
     private func segmentationGlowLayer(in size: CGSize) -> some View {
         #if canImport(CoreImage)
-        if !viewModel.segmentationMasks.isEmpty, let cameraFrame = cameraFrameRect(in: size) {
+        if shouldShowSegmentationGlow,
+           !viewModel.segmentationMasks.isEmpty,
+           let cameraFrame = cameraFrameRect(in: size) {
             ZStack {
                 ForEach(Array(viewModel.segmentationMasks.keys), id: \.self) { key in
                     if let mask = viewModel.segmentationMasks[key],
@@ -494,6 +496,10 @@ struct CameraPreviewView: View {
         var pending = all
         pending.subtract(matched)
         return pending
+    }
+
+    private var shouldShowSegmentationGlow: Bool {
+        [.ready, .playing, .paused].contains(gameViewModel.phase)
     }
 
     @ViewBuilder
