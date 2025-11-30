@@ -118,42 +118,7 @@ public actor SegmentationService {
         }
 
         let task = Task {
-            await logger.log("SegmentationService.prepare: ENTRY", level: .debug, category: "SegmentationKit.SAM")
-            await logger.log(
-                "SegmentationService.prepare: computeUnits encoder=\(encoderConfiguration.computeUnits.rawValue) prompt=\(promptConfiguration.computeUnits.rawValue) decoder=\(decoderConfiguration.computeUnits.rawValue)",
-                level: .debug,
-                category: "SegmentationKit.SAM"
-            )
-            let bundle = Bundle.module
-
-            await logger.log("SegmentationService.prepare: loading encoder...", level: .debug, category: "SegmentationKit.SAM")
-            let encoderModel = try loadModel(
-                named: "SAM2_1SmallImageEncoderFLOAT16",
-                in: bundle,
-                configuration: encoderConfiguration
-            )
-            await logger.log("SegmentationService.prepare: encoder loaded", level: .debug, category: "SegmentationKit.SAM")
-
-            await logger.log("SegmentationService.prepare: loading promptEncoder...", level: .debug, category: "SegmentationKit.SAM")
-            let promptModel = try loadModel(
-                named: "SAM2_1SmallPromptEncoderFLOAT16",
-                in: bundle,
-                configuration: promptConfiguration
-            )
-            await logger.log("SegmentationService.prepare: promptEncoder loaded", level: .debug, category: "SegmentationKit.SAM")
-
-            await logger.log("SegmentationService.prepare: loading decoder...", level: .debug, category: "SegmentationKit.SAM")
-            let decoderModel = try loadModel(
-                named: "SAM2_1SmallMaskDecoderFLOAT16",
-                in: bundle,
-                configuration: decoderConfiguration
-            )
-            await logger.log("SegmentationService.prepare: decoder loaded", level: .debug, category: "SegmentationKit.SAM")
-
-            self.encoder = encoderModel
-            self.promptEncoder = promptModel
-            self.decoder = decoderModel
-            await logger.log("SegmentationService.prepare: all models loaded successfully", level: .info, category: "SegmentationKit.SAM")
+            try await self.loadSegmentationModels()
         }
         prepareTask = task
         do {
@@ -163,10 +128,54 @@ public actor SegmentationService {
             throw error
         }
         prepareTask = nil
-        #else
+#else
         throw SegmentationServiceError.unsupportedPlatform
         #endif
     }
+
+#if canImport(CoreML)
+    private func loadSegmentationModels() async throws {
+        await logger.log("SegmentationService.prepare: ENTRY", level: .debug, category: "SegmentationKit.SAM")
+        let encoderUnits = encoderConfiguration.computeUnits.rawValue
+        let promptUnits = promptConfiguration.computeUnits.rawValue
+        let decoderUnits = decoderConfiguration.computeUnits.rawValue
+        await logger.log(
+            "SegmentationService.prepare: computeUnits encoder=\(encoderUnits) prompt=\(promptUnits) decoder=\(decoderUnits)",
+            level: .debug,
+            category: "SegmentationKit.SAM"
+        )
+        let bundle = Bundle.module
+
+        await logger.log("SegmentationService.prepare: loading encoder...", level: .debug, category: "SegmentationKit.SAM")
+        let encoderModel = try loadModel(
+            named: "SAM2_1SmallImageEncoderFLOAT16",
+            in: bundle,
+            configuration: encoderConfiguration
+        )
+        await logger.log("SegmentationService.prepare: encoder loaded", level: .debug, category: "SegmentationKit.SAM")
+
+        await logger.log("SegmentationService.prepare: loading promptEncoder...", level: .debug, category: "SegmentationKit.SAM")
+        let promptModel = try loadModel(
+            named: "SAM2_1SmallPromptEncoderFLOAT16",
+            in: bundle,
+            configuration: promptConfiguration
+        )
+        await logger.log("SegmentationService.prepare: promptEncoder loaded", level: .debug, category: "SegmentationKit.SAM")
+
+        await logger.log("SegmentationService.prepare: loading decoder...", level: .debug, category: "SegmentationKit.SAM")
+        let decoderModel = try loadModel(
+            named: "SAM2_1SmallMaskDecoderFLOAT16",
+            in: bundle,
+            configuration: decoderConfiguration
+        )
+        await logger.log("SegmentationService.prepare: decoder loaded", level: .debug, category: "SegmentationKit.SAM")
+
+        self.encoder = encoderModel
+        self.promptEncoder = promptModel
+        self.decoder = decoderModel
+        await logger.log("SegmentationService.prepare: all models loaded successfully", level: .info, category: "SegmentationKit.SAM")
+    }
+#endif
 
     #if canImport(CoreVideo)
     /// Main entry point triggered by the detection system.
