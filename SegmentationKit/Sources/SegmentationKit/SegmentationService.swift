@@ -93,12 +93,11 @@ public actor SegmentationService {
     /// Main entry point triggered by the detection system.
     public func segment(_ request: SegmentationRequest) async throws -> CIImage {
         #if canImport(CoreML)
-        guard let encoder, let decoder else {
+        if encoder == nil || decoder == nil {
             try await prepare()
-            guard let encoder, let decoder else {
-                throw SegmentationServiceError.modelNotFound("SAM 2.1 CoreML bundles missing")
-            }
-            _ = (encoder, decoder)
+        }
+        guard let encoder, let decoder else {
+            throw SegmentationServiceError.modelNotFound("SAM 2.1 CoreML bundles missing")
         }
 
         let preparedBuffer = try prepareInputBuffer(request.pixelBuffer)
