@@ -423,9 +423,9 @@ struct CameraPreviewView: View {
         Self.maskCache.prune(keeping: maskIDs)
 
         let masks: [SegmentationMaskDrawable] = pendingObjects.compactMap { object in
-            guard let mask = viewModel.segmentationMasks[object.id],
-                  let cgImage = Self.maskCache.image(for: object.id, mask: mask) else { return nil }
-            let frame = boundingRect(for: object, in: size)
+            guard let maskResult = viewModel.segmentationMasks[object.id],
+                  let cgImage = Self.maskCache.image(for: object.id, mask: maskResult.image) else { return nil }
+            let frame = boundingRect(forNormalizedRect: maskResult.boundingBox, in: size)
                 .intersection(cameraFrame)
             guard frame.width > 1, frame.height > 1 else { return nil }
             return SegmentationMaskDrawable(id: object.id, cgImage: cgImage, frame: frame)
@@ -903,7 +903,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         round: Round?,
         placedLabels: Set<GameKitLS.Label.ID>,
         trackSnapshots: [DetectionTrackSnapshot],
-        segmentationMasks: [UUID: CIImage],
+        segmentationMasks: [UUID: SegmentationMaskResult],
         inputImageSize: CGSize?
     ) {
         guard shouldRenderGlows(for: phase), let round else {
@@ -928,15 +928,15 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             for (maskID, mask) in segmentationMasks {
                 guard pendingIDs.contains(maskID),
                       let snapshot = snapshotLookup[maskID],
-                      let viewRect = projectedRect(for: snapshot.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size),
+                      let viewRect = projectedRect(for: mask.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size),
                       viewRect.width > 2, viewRect.height > 2,
                       let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView),
                       isRaycastValid(raycastResult, camera: frame.camera) else { continue }
 
                 let depth = distanceFromCamera(to: raycastResult.worldTransform.translation, camera: frame.camera)
-                guard let planeSize = planeSizeInMeters(for: snapshot.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera) else { continue }
+                guard let planeSize = planeSizeInMeters(for: mask.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera) else { continue }
 
-                guard let texture = textureCache.texture(for: maskID, mask: mask) else {
+                guard let texture = textureCache.texture(for: maskID, mask: mask.image) else {
                     print("⚠️ Segmentation mask texture missing for \(maskID). Skipping anchor to avoid full-screen overlay.")
                     continue
                 }

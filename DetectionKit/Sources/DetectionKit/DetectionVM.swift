@@ -18,6 +18,13 @@ import Utilities
 import CoreImage
 #endif
 
+#if canImport(CoreImage)
+public struct SegmentationMaskResult: Sendable {
+    public let image: CIImage
+    public let boundingBox: NormalizedRect
+}
+#endif
+
 #if canImport(CoreVideo)
 import CoreVideo
 #endif
@@ -51,7 +58,7 @@ public final class DetectionVM: ObservableObject {
     @Published public private(set) var lastError: DetectionError?
     @Published public private(set) var inputImageSize: CGSize?
 #if canImport(CoreImage)
-    @Published public private(set) var segmentationMasks: [UUID: CIImage] = [:]
+    @Published public private(set) var segmentationMasks: [UUID: SegmentationMaskResult] = [:]
 #endif
 
     public let throttleInterval: TimeInterval
@@ -487,6 +494,7 @@ public final class DetectionVM: ObservableObject {
         let prompt = promptRect(for: detection.boundingBox, pixelBuffer: pixelBuffer)
         let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
         let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+        let maskBoundingBox = detection.boundingBox
         let request = SegmentationRequest(
             pixelBuffer: pixelBuffer,
             prompt: prompt,
@@ -504,7 +512,7 @@ public final class DetectionVM: ObservableObject {
                 let mask = try await service.segment(request)
                 await MainActor.run {
 #if canImport(CoreImage)
-                    self.segmentationMasks[detectionID] = mask
+                    self.segmentationMasks[detectionID] = SegmentationMaskResult(image: mask, boundingBox: maskBoundingBox)
 #endif
                     self.pendingSegmentationDetections.remove(detectionID)
                     self.segmentationFailureCount = 0
