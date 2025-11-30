@@ -548,12 +548,12 @@ public final class DetectionVM: ObservableObject {
     }
 
     private func promptRect(for boundingBox: NormalizedRect, pixelBuffer: CVPixelBuffer) -> CGRect {
-        let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
-        let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-        let x = CGFloat(boundingBox.origin.x) * width
-        let y = CGFloat(boundingBox.origin.y) * height
-        let w = CGFloat(boundingBox.size.width) * width
-        let h = CGFloat(boundingBox.size.height) * height
+        // Segmentation pipeline now expects normalized coordinates (0-1) that match the
+        // detection output, so we simply mirror the values without scaling to pixels.
+        let x = CGFloat(boundingBox.origin.x)
+        let y = CGFloat(boundingBox.origin.y)
+        let w = CGFloat(boundingBox.size.width)
+        let h = CGFloat(boundingBox.size.height)
         return CGRect(x: x, y: y, width: w, height: h)
     }
 
