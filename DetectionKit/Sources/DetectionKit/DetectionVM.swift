@@ -261,7 +261,7 @@ public final class DetectionVM: ObservableObject {
         let detectionID = target.id
         let detectionLabel = target.label
 
-        Task.detached(priority: .utility) { [weak self] in
+        Task(priority: .utility) { [weak self] in
             guard let self else { return }
             do {
                 let mask = try await service.segment(request)

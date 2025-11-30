@@ -38,6 +38,10 @@ public struct SegmentationRequest {
 }
 #endif
 
+#if canImport(CoreVideo)
+extension SegmentationRequest: @unchecked Sendable {}
+#endif
+
 public enum SegmentationServiceError: Error {
     case unsupportedPlatform
     case modelNotFound(String)
