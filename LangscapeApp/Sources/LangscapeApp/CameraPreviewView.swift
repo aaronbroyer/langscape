@@ -83,16 +83,16 @@ struct CameraPreviewView: View {
             case .home:
                 homeOverlay
             case .scanning:
-                detectionOverlay(for: viewModel.detections, in: size)
+                maskOverlay(in: size)
                 scanningIndicator
             case .ready:
-                detectionOverlay(for: viewModel.detections, in: size)
+                maskOverlay(in: size)
                 startButton
             case .playing:
-                detectionOverlay(for: viewModel.detections, in: size)
+                maskOverlay(in: size)
                 roundOverlay(in: size, interactive: true)
             case .paused:
-                detectionOverlay(for: viewModel.detections, in: size)
+                maskOverlay(in: size)
                 roundOverlay(in: size, interactive: false)
             case .completed:
                 EmptyView()
@@ -396,22 +396,35 @@ struct CameraPreviewView: View {
         gameViewModel.beginScanning()
     }
 
-    private func detectionOverlay(for detections: [Detection], in size: CGSize) -> AnyView {
+    private func maskOverlay(in size: CGSize) -> AnyView {
 #if canImport(CoreImage)
-        guard shouldShowMaskOverlay(for: gameViewModel.phase), let cameraFrame = cameraFrameRect(in: size) else {
+        guard shouldShowMaskOverlay(for: gameViewModel.phase),
+              let round = gameViewModel.round,
+              let cameraFrame = cameraFrameRect(in: size) else {
             return AnyView(
                 Color.clear
                     .frame(width: size.width, height: size.height)
                     .allowsHitTesting(false)
             )
         }
-        let maskIDs = Set(viewModel.segmentationMasks.keys)
-        Self.maskCache.prune(keeping: maskIDs)
-        let masks: [SegmentationMaskDrawable] = viewModel.segmentationMasks.compactMap { entry in
-            let (id, mask) = entry
-            guard let cgImage = Self.maskCache.image(for: id, mask: mask) else { return nil }
-            return SegmentationMaskDrawable(id: id, cgImage: cgImage)
+        let pendingObjects = pendingRoundObjects(round: round, placedLabels: gameViewModel.placedLabels)
+        guard !pendingObjects.isEmpty else {
+            return AnyView(Color.clear.frame(width: size.width, height: size.height).allowsHitTesting(false))
         }
+
+        let pendingIDs = Set(pendingObjects.map(\.id))
+        let maskIDs = Set(viewModel.segmentationMasks.keys.filter { pendingIDs.contains($0) })
+        Self.maskCache.prune(keeping: maskIDs)
+
+        let masks: [SegmentationMaskDrawable] = pendingObjects.compactMap { object in
+            guard let mask = viewModel.segmentationMasks[object.id],
+                  let cgImage = Self.maskCache.image(for: object.id, mask: mask) else { return nil }
+            return SegmentationMaskDrawable(id: object.id, cgImage: cgImage)
+        }
+        guard !masks.isEmpty else {
+            return AnyView(Color.clear.frame(width: size.width, height: size.height).allowsHitTesting(false))
+        }
+
         return AnyView(
             SegmentationOverlayLayer(
                 masks: masks,
@@ -430,11 +443,16 @@ struct CameraPreviewView: View {
 
     private func shouldShowMaskOverlay(for phase: LabelScrambleVM.Phase) -> Bool {
         switch phase {
-        case .home:
-            return false
-        default:
+        case .ready, .playing, .paused:
             return true
+        default:
+            return false
         }
+    }
+
+    private func pendingRoundObjects(round: Round, placedLabels: Set<GameKitLS.Label.ID>) -> [DetectedObject] {
+        let satisfiedIDs = Set(placedLabels.compactMap { round.target(for: $0) })
+        return round.objects.filter { !satisfiedIDs.contains($0.id) }
     }
 
     private func boundingRect(for detection: Detection, in viewSize: CGSize) -> CGRect {
@@ -458,17 +476,12 @@ struct CameraPreviewView: View {
 
     private func requestSegmentationForCurrentRound() {
         guard let round = gameViewModel.round else { return }
-        let grouped = Dictionary(grouping: viewModel.detections, by: { $0.label.lowercased() })
-        for object in round.objects {
-            let key = object.sourceLabel.lowercased()
-            guard let match = grouped[key]?.max(by: { $0.confidence < $1.confidence }) else { continue }
-            #if canImport(CoreImage)
-            if viewModel.segmentationMasks[match.id] == nil {
-                viewModel.requestSegmentation(for: match.id)
-            }
-            #else
-            viewModel.requestSegmentation(for: match.id)
-            #endif
+        let pendingObjects = pendingRoundObjects(round: round, placedLabels: gameViewModel.placedLabels)
+        guard !pendingObjects.isEmpty else { return }
+
+        let availableIDs = Set(viewModel.trackSnapshots.map(\.id))
+        for object in pendingObjects where availableIDs.contains(object.id) {
+            viewModel.requestSegmentation(for: object.id)
         }
     }
 }
@@ -813,7 +826,7 @@ private struct ARCameraView: UIViewRepresentable {
             phase: gameViewModel.phase,
             round: gameViewModel.round,
             placedLabels: gameViewModel.placedLabels,
-            detections: viewModel.detections,
+            trackSnapshots: viewModel.trackSnapshots,
             segmentationMasks: viewModel.segmentationMasks,
             inputImageSize: viewModel.inputImageSize
         )
@@ -877,7 +890,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         phase: LabelScrambleVM.Phase,
         round: Round?,
         placedLabels: Set<GameKitLS.Label.ID>,
-        detections: [Detection],
+        trackSnapshots: [DetectionTrackSnapshot],
         segmentationMasks: [UUID: CIImage],
         inputImageSize: CGSize?
     ) {
@@ -890,31 +903,25 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             return
         }
 
-        let pendingLabels = pendingSourceLabels(in: round, placedLabels: placedLabels)
-        guard !pendingLabels.isEmpty else {
+        let pendingIDs = pendingObjectIDs(in: round, placedLabels: placedLabels)
+        guard !pendingIDs.isEmpty else {
             clearAnchors(from: arView)
             return
         }
 
-        let detectionLookup = Dictionary(uniqueKeysWithValues: detections.map { ($0.id, $0) })
-        let activeOverlayIDs: Set<UUID> = Set(
-            detections
-                .filter { pendingLabels.contains($0.label.lowercased()) }
-                .map(\.id)
-        )
-
-        var consumedMaskIDs: [UUID] = []
+        let snapshotLookup = Dictionary(uniqueKeysWithValues: trackSnapshots.map { ($0.id, $0) })
+        let activeOverlayIDs: Set<UUID> = Set(segmentationMasks.keys.filter { pendingIDs.contains($0) })
 
         if !segmentationMasks.isEmpty {
             for (maskID, mask) in segmentationMasks {
-                guard let detection = detectionLookup[maskID],
-                      pendingLabels.contains(detection.label.lowercased()),
-                      let viewRect = projectedRect(for: detection.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size),
+                guard pendingIDs.contains(maskID),
+                      let snapshot = snapshotLookup[maskID],
+                      let viewRect = projectedRect(for: snapshot.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size),
                       viewRect.width > 2, viewRect.height > 2,
                       let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView) else { continue }
 
                 let depth = distanceFromCamera(to: raycastResult.worldTransform.translation, camera: frame.camera)
-                guard let planeSize = planeSizeInMeters(for: detection.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera),
+                guard let planeSize = planeSizeInMeters(for: snapshot.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera),
                       let texture = textureCache.texture(for: maskID, mask: mask) else { continue }
 
                 placeOverlay(
@@ -925,13 +932,6 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
                     camera: frame.camera,
                     arView: arView
                 )
-                consumedMaskIDs.append(maskID)
-            }
-        }
-
-        if !consumedMaskIDs.isEmpty {
-            Task { @MainActor in
-                consumedMaskIDs.forEach { viewModel.consumeSegmentationMask(for: $0) }
             }
         }
 
@@ -948,12 +948,12 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         }
     }
 
-    private func pendingSourceLabels(in round: Round, placedLabels: Set<GameKitLS.Label.ID>) -> Set<String> {
+    private func pendingObjectIDs(in round: Round, placedLabels: Set<GameKitLS.Label.ID>) -> Set<DetectedObject.ID> {
         if placedLabels.isEmpty {
-            return Set(round.objects.map { $0.sourceLabel.lowercased() })
+            return Set(round.objects.map(\.id))
         }
         let satisfied = Set(placedLabels.compactMap { round.target(for: $0) })
-        return Set(round.objects.filter { !satisfied.contains($0.id) }.map { $0.sourceLabel.lowercased() })
+        return Set(round.objects.compactMap { satisfied.contains($0.id) ? nil : $0.id })
     }
 
     private func raycast(at point: CGPoint, in arView: ARView) -> ARRaycastResult? {
