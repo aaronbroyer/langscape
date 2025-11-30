@@ -78,7 +78,6 @@ public actor SegmentationService {
     private var decoder: MLModel?
     private let ciContext = CIContext()
     private let targetImageSize = CGSize(width: 1024, height: 1024)
-    private let maxPromptPointCount = 15
 #if canImport(CoreVideo)
     private var cachedImageFeatures: ImageFeatures?
     private var lastFrameFingerprint: UInt64?
@@ -140,8 +139,8 @@ public actor SegmentationService {
                 throw SegmentationServiceError.failedToCreateEmbeddings
             }
 
-            let promptPoints = convertBoxToPrompts(request.prompt, originalSize: request.imageSize, inputImageSize: inputImageSize)
-            let promptLabels = boxPromptLabels()
+            let promptPoints = try convertBoxToPrompts(request.prompt, originalSize: request.imageSize, inputImageSize: inputImageSize)
+            let promptLabels = try boxPromptLabels()
             let promptEmbeddings = try runPromptEncoder(points: promptPoints, labels: promptLabels, promptEncoder: promptEncoder)
 
             return try runDecoder(
@@ -199,15 +198,13 @@ public actor SegmentationService {
     }
 
     private func runPromptEncoder(
-        points: MLShapedArray<Float16>,
-        labels: MLShapedArray<Float16>,
+        points: MLMultiArray,
+        labels: MLMultiArray,
         promptEncoder: MLModel
     ) throws -> PromptEmbeddings {
-        let pointsArray = MLMultiArray(points)
-        let labelsArray = MLMultiArray(labels)
         let provider = try MLDictionaryFeatureProvider(dictionary: [
-            "points": MLFeatureValue(multiArray: pointsArray),
-            "labels": MLFeatureValue(multiArray: labelsArray)
+            "points": MLFeatureValue(multiArray: points),
+            "labels": MLFeatureValue(multiArray: labels)
         ])
         let output = try promptEncoder.prediction(from: provider)
         guard
@@ -369,39 +366,31 @@ public actor SegmentationService {
         return output
     }
 
-    private func convertBoxToPrompts(_ prompt: CGRect, originalSize: CGSize, inputImageSize: CGSize) -> MLShapedArray<Float16> {
+    private func convertBoxToPrompts(_ prompt: CGRect, originalSize: CGSize, inputImageSize: CGSize) throws -> MLMultiArray {
         let sx = inputImageSize.width / max(originalSize.width, 1)
         let sy = inputImageSize.height / max(originalSize.height, 1)
 
-        let topLeft = CGPoint(x: prompt.minX * sx, y: prompt.minY * sy)
-        let bottomRight = CGPoint(x: prompt.maxX * sx, y: prompt.maxY * sy)
+        let topLeft = clamp(point: CGPoint(x: prompt.minX * sx, y: prompt.minY * sy), maxSize: inputImageSize)
+        let bottomRight = clamp(point: CGPoint(x: prompt.maxX * sx, y: prompt.maxY * sy), maxSize: inputImageSize)
 
-        let clampedTopLeft = clamp(point: topLeft, maxSize: inputImageSize)
-        let clampedBottomRight = clamp(point: bottomRight, maxSize: inputImageSize)
-        let maxPoints = maxPromptPointCount
-
-        return MLShapedArray<Float16>(unsafeUninitializedShape: [1, maxPoints, 2]) { buffer, _ in
+        let array = try MLMultiArray(shape: [1, 2, 2] as [NSNumber], dataType: .float16)
+        array.withUnsafeMutableBufferPointer(ofType: Float16.self) { buffer, _ in
             buffer.initialize(repeating: Float16(0))
-
-            func writePoint(_ index: Int, point: CGPoint) {
-                guard index < maxPoints else { return }
-                let base = index * 2
-                buffer[base] = Float16(Float(point.x))
-                buffer[base + 1] = Float16(Float(point.y))
-            }
-
-            writePoint(0, point: clampedTopLeft)
-            writePoint(1, point: clampedBottomRight)
+            buffer[0] = Float16(Float(topLeft.x))
+            buffer[1] = Float16(Float(topLeft.y))
+            buffer[2] = Float16(Float(bottomRight.x))
+            buffer[3] = Float16(Float(bottomRight.y))
         }
+        return array
     }
 
-    private func boxPromptLabels() -> MLShapedArray<Float16> {
-        let maxPoints = maxPromptPointCount
-        return MLShapedArray<Float16>(unsafeUninitializedShape: [1, maxPoints]) { buffer, _ in
-            buffer.initialize(repeating: Float16(-1))
-            if maxPoints > 0 { buffer[0] = Float16(2) }
-            if maxPoints > 1 { buffer[1] = Float16(3) }
+    private func boxPromptLabels() throws -> MLMultiArray {
+        let array = try MLMultiArray(shape: [1, 2] as [NSNumber], dataType: .float16)
+        array.withUnsafeMutableBufferPointer(ofType: Float16.self) { buffer, _ in
+            buffer[0] = Float16(2)
+            buffer[1] = Float16(3)
         }
+        return array
     }
 
     private func clamp(point: CGPoint, maxSize: CGSize) -> CGPoint {
