@@ -425,7 +425,10 @@ struct CameraPreviewView: View {
         let masks: [SegmentationMaskDrawable] = pendingObjects.compactMap { object in
             guard let mask = viewModel.segmentationMasks[object.id],
                   let cgImage = Self.maskCache.image(for: object.id, mask: mask) else { return nil }
-            return SegmentationMaskDrawable(id: object.id, cgImage: cgImage)
+            let frame = boundingRect(for: object, in: size)
+                .intersection(cameraFrame)
+            guard frame.width > 1, frame.height > 1 else { return nil }
+            return SegmentationMaskDrawable(id: object.id, cgImage: cgImage, frame: frame)
         }
         guard !masks.isEmpty else {
             return AnyView(Color.clear.frame(width: size.width, height: size.height).allowsHitTesting(false))
@@ -434,7 +437,6 @@ struct CameraPreviewView: View {
         return AnyView(
             SegmentationOverlayLayer(
                 masks: masks,
-                cameraFrame: cameraFrame,
                 viewSize: size
             )
         )
@@ -496,11 +498,11 @@ struct CameraPreviewView: View {
 private struct SegmentationMaskDrawable: Identifiable {
     let id: UUID
     let cgImage: CGImage
+    let frame: CGRect
 }
 
 private struct SegmentationOverlayLayer: View {
     let masks: [SegmentationMaskDrawable]
-    let cameraFrame: CGRect
     let viewSize: CGSize
 
     var body: some View {
@@ -543,8 +545,8 @@ private struct SegmentationOverlayLayer: View {
             .interpolation(.high)
             .antialiased(true)
             .aspectRatio(contentMode: .fill)
-            .frame(width: cameraFrame.width, height: cameraFrame.height)
-            .position(x: cameraFrame.midX, y: cameraFrame.midY)
+            .frame(width: mask.frame.width, height: mask.frame.height)
+            .position(x: mask.frame.midX, y: mask.frame.midY)
     }
 }
 
