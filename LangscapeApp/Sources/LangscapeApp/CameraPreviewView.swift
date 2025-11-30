@@ -788,6 +788,8 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
                 .map(\.id)
         )
 
+        var consumedMaskIDs: [UUID] = []
+
         if !segmentationMasks.isEmpty {
             for (maskID, mask) in segmentationMasks {
                 guard let detection = detectionLookup[maskID],
@@ -808,7 +810,13 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
                     camera: frame.camera,
                     arView: arView
                 )
-                viewModel.consumeSegmentationMask(for: maskID)
+                consumedMaskIDs.append(maskID)
+            }
+        }
+
+        if !consumedMaskIDs.isEmpty {
+            Task { @MainActor in
+                consumedMaskIDs.forEach { viewModel.consumeSegmentationMask(for: $0) }
             }
         }
 
