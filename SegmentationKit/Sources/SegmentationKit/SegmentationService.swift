@@ -123,7 +123,7 @@ public actor SegmentationService {
     // MARK: - Encoder/Decoder
 
     #if canImport(CoreML)
-    private func loadModel(named resource: String, in bundle: Bundle) async throws -> MLModel {
+    private func loadModel(named resource: String, in bundle: Bundle) throws -> MLModel {
         if let compiledURL = bundle.url(forResource: resource, withExtension: "mlmodelc") {
             return try MLModel(contentsOf: compiledURL)
         }

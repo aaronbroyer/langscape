@@ -250,6 +250,8 @@ public final class DetectionVM: ObservableObject {
         pendingSegmentationDetections.insert(target.id)
 
         let prompt = promptRect(for: target.boundingBox, pixelBuffer: pixelBuffer)
+        let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+        let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
         let request = SegmentationRequest(
             pixelBuffer: pixelBuffer,
             prompt: prompt,
