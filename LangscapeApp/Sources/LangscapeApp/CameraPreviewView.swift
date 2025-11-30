@@ -503,27 +503,25 @@ struct CameraPreviewView: View {
             EmptyView()
         } else {
             let corner = min(rect.width, rect.height) * 0.25
-            let gradient = RadialGradient(
-                gradient: Gradient(colors: [
-                    ColorPalette.accent.swiftUIColor.opacity(0.8),
-                    ColorPalette.accent.swiftUIColor.opacity(0.05)
-                ]),
-                center: .center,
-                startRadius: 8,
-                endRadius: max(rect.width, rect.height) * 0.6
-            )
+            let baseStroke = ColorPalette.accent.swiftUIColor
 
-            RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .fill(gradient)
+            ZStack {
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .stroke(baseStroke.opacity(0.95), lineWidth: 2.5)
+                    .blur(radius: 0.8)
+
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .stroke(baseStroke.opacity(0.65), lineWidth: 8)
+                    .blur(radius: 6)
+
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .stroke(baseStroke.opacity(0.35), lineWidth: 16)
+                    .blur(radius: 12)
+            }
                 .frame(width: rect.width, height: rect.height)
                 .position(x: rect.midX, y: rect.midY)
                 .blendMode(.screen)
-                .overlay(
-                    RoundedRectangle(cornerRadius: corner, style: .continuous)
-                        .stroke(ColorPalette.accent.swiftUIColor.opacity(0.85), lineWidth: 2.5)
-                        .blur(radius: 1.5)
-                )
-                .shadow(color: ColorPalette.accent.swiftUIColor.opacity(0.3), radius: 12)
+                .shadow(color: baseStroke.opacity(0.25), radius: 12)
                 .transition(.opacity.combined(with: .scale))
         }
     }
