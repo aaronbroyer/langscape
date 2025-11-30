@@ -60,6 +60,7 @@ public final class DetectionVM: ObservableObject {
     private var referee: VLMReferee?
     private var refiner: ClassificationRefiner?
     private let errorStore: ErrorStore
+    private let auxiliaryRefereeEnabled = false
     private var lastSubmissionDate: Date = .distantPast
     private var fpsWindowStart: Date?
     private var processedFrames = 0
@@ -297,7 +298,7 @@ public final class DetectionVM: ObservableObject {
         auxiliaryLoadTask?.cancel()
         let logger = self.logger
         auxiliaryLoadTask = Task(priority: .utility) { [weak self] in
-            let result = await DetectionVM.prepareAuxiliaryModels(logger: logger, geminiAPIKey: geminiAPIKey)
+            let result = await DetectionVM.prepareAuxiliaryModels(logger: logger, geminiAPIKey: geminiAPIKey, loadReferee: auxiliaryRefereeEnabled)
             guard let self else { return }
             self.referee = result.referee
             self.refiner = result.refiner
@@ -328,21 +329,25 @@ public final class DetectionVM: ObservableObject {
     }
 #endif
 
-    nonisolated private static func prepareAuxiliaryModels(logger: Logger, geminiAPIKey: String?) async -> (referee: VLMReferee?, refiner: ClassificationRefiner?) {
+    nonisolated private static func prepareAuxiliaryModels(logger: Logger, geminiAPIKey: String?, loadReferee: Bool) async -> (referee: VLMReferee?, refiner: ClassificationRefiner?) {
         var loadedReferee: VLMReferee?
         var loadedRefiner: ClassificationRefiner?
 
-        do {
-            loadedReferee = try VLMReferee(
-                cropSize: 256,
-                acceptGate: 0.85,
-                minKeepGate: 0.70,
-                maxProposals: 48,
-                geminiAPIKey: geminiAPIKey
-            )
-            await logger.log("DetectionVM: Auxiliary VLM referee loaded for client-side verification", level: .info, category: "DetectionKit.DetectionVM")
-        } catch {
-            await logger.log("DetectionVM: Skipping auxiliary referee (\(error.localizedDescription))", level: .warning, category: "DetectionKit.DetectionVM")
+        if loadReferee {
+            do {
+                loadedReferee = try VLMReferee(
+                    cropSize: 256,
+                    acceptGate: 0.85,
+                    minKeepGate: 0.70,
+                    maxProposals: 48,
+                    geminiAPIKey: geminiAPIKey
+                )
+                await logger.log("DetectionVM: Auxiliary VLM referee loaded for client-side verification", level: .info, category: "DetectionKit.DetectionVM")
+            } catch {
+                await logger.log("DetectionVM: Skipping auxiliary referee (\(error.localizedDescription))", level: .warning, category: "DetectionKit.DetectionVM")
+            }
+        } else {
+            await logger.log("DetectionVM: Auxiliary VLM referee disabled via feature flag", level: .info, category: "DetectionKit.DetectionVM")
         }
 
         do {
@@ -414,7 +419,7 @@ public final class DetectionVM: ObservableObject {
         let detectionID = target.id
         let detectionLabel = target.label
 
-        Task(priority: .utility) { [weak self] in
+        Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
                 await self.logger.log("Segmentation starting for \(detectionLabel) (\(reason)) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
