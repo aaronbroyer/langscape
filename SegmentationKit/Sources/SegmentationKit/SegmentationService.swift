@@ -242,28 +242,34 @@ public actor SegmentationService {
         let width = logits.shape[3].intValue
         let total = width * height
         var values = [Float](repeating: 0, count: total)
-        let threshold: Float = 0.5
         let fullSize = CGSize(width: max(originalSize.width, 1), height: max(originalSize.height, 1))
-        let boundedPrompt = prompt
-            .standardized
+        var boundedPrompt = prompt.standardized.intersection(CGRect(origin: .zero, size: fullSize))
+        if boundedPrompt.isNull || boundedPrompt.width <= 1 || boundedPrompt.height <= 1 {
+            boundedPrompt = CGRect(origin: .zero, size: fullSize)
+        }
+        let expansionX = boundedPrompt.width * 0.2
+        let expansionY = boundedPrompt.height * 0.2
+        let expandedPrompt = boundedPrompt
+            .insetBy(dx: -expansionX, dy: -expansionY)
             .intersection(CGRect(origin: .zero, size: fullSize))
-        let hasROI = !boundedPrompt.isNull && boundedPrompt.width > 1 && boundedPrompt.height > 1
-        let roiMinX = hasROI ? Int(max(0, floor(boundedPrompt.minX / fullSize.width * CGFloat(width)))) : 0
-        let roiMaxX = hasROI ? Int(min(CGFloat(width - 1), ceil(boundedPrompt.maxX / fullSize.width * CGFloat(width)))) : (width - 1)
-        let roiMinY = hasROI ? Int(max(0, floor(boundedPrompt.minY / fullSize.height * CGFloat(height)))) : 0
-        let roiMaxY = hasROI ? Int(min(CGFloat(height - 1), ceil(boundedPrompt.maxY / fullSize.height * CGFloat(height)))) : (height - 1)
+        let roiMinX = Int(max(0, floor(expandedPrompt.minX / fullSize.width * CGFloat(width))))
+        let roiMaxX = Int(min(CGFloat(width - 1), ceil(expandedPrompt.maxX / fullSize.width * CGFloat(width))))
+        let roiMinY = Int(max(0, floor(expandedPrompt.minY / fullSize.height * CGFloat(height))))
+        let roiMaxY = Int(min(CGFloat(height - 1), ceil(expandedPrompt.maxY / fullSize.height * CGFloat(height))))
+        let maskThreshold: Double = 0.6
         for y in 0..<height {
             for x in 0..<width {
-                let shouldKeep = x >= roiMinX && x <= roiMaxX && y >= roiMinY && y <= roiMaxY
+                let withinROI = x >= roiMinX && x <= roiMaxX && y >= roiMinY && y <= roiMaxY
                 let idx = [
                     NSNumber(value: 0),
                     NSNumber(value: maskIndex),
                     NSNumber(value: y),
                     NSNumber(value: x)
                 ]
-                let value = logits[idx].floatValue
-                let sigmoid = 1.0 / (1.0 + exp(-value))
-                values[y * width + x] = (shouldKeep && sigmoid >= threshold) ? 1.0 : 0.0
+                let value = logits[idx].doubleValue
+                let probability = 1.0 / (1.0 + exp(-value))
+                let shouldKeep = withinROI && probability >= maskThreshold
+                values[y * width + x] = shouldKeep ? Float(probability) : 0
             }
         }
         let data = Data(bytes: values, count: values.count * MemoryLayout<Float>.size)

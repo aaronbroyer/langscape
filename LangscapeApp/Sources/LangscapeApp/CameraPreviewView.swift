@@ -67,6 +67,12 @@ struct CameraPreviewView: View {
                 .padding(.top, 24)
                 .padding(.leading, 24)
         }
+        .onAppear {
+            viewModel.setAutomaticSegmentationEnabled(false)
+        }
+        .onDisappear {
+            viewModel.setAutomaticSegmentationEnabled(true)
+        }
     }
 
     @ViewBuilder
@@ -451,7 +457,7 @@ struct CameraPreviewView: View {
                             .frame(width: cameraFrame.width, height: cameraFrame.height)
                             .position(x: cameraFrame.midX, y: cameraFrame.midY)
                             .blendMode(.screen)
-                            .opacity(0.85)
+                            .opacity(0.9)
                     }
                 }
             }
@@ -812,11 +818,14 @@ private extension CameraPreviewView {
 
     #if canImport(CoreImage)
     func neonGlowImage(for mask: CIImage) -> CGImage? {
-        let edges = mask
+        let normalized = mask
+            .applyingFilter("CIColorControls", parameters: ["inputBrightness": -0.08, "inputContrast": 1.35])
+        let alphaMask = normalized.applyingFilter("CIMaskToAlpha")
+        let edges = alphaMask
             .clampedToExtent()
-            .applyingFilter("CIMorphologyGradient", parameters: ["inputRadius": 2])
+            .applyingFilter("CIMorphologyGradient", parameters: ["inputRadius": 1.0])
             .cropped(to: mask.extent)
-            .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": 6])
+            .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": 4])
             .cropped(to: mask.extent)
 
         let tinted = edges.applyingFilter(
@@ -841,7 +850,13 @@ private extension CameraPreviewView {
         for object in round.objects {
             let key = object.sourceLabel.lowercased()
             guard let match = grouped[key]?.max(by: { $0.confidence < $1.confidence }) else { continue }
+            #if canImport(CoreImage)
+            if viewModel.segmentationMasks[match.id] == nil {
+                viewModel.requestSegmentation(for: match.id)
+            }
+            #else
             viewModel.requestSegmentation(for: match.id)
+            #endif
         }
     }
 }

@@ -72,6 +72,7 @@ public final class DetectionVM: ObservableObject {
     private var userRequestedSegmentationIDs: Set<UUID> = []
     private let segmentationConfidenceGate: Double = 0.85
     private let segmentationAreaGate: Double = 0.35
+    private var automaticSegmentationEnabled = false
 #endif
 
     public init(
@@ -193,6 +194,13 @@ public final class DetectionVM: ObservableObject {
     public func requestSegmentation(for detectionID: UUID) {
         userRequestedSegmentationIDs.insert(detectionID)
     }
+
+    public func setAutomaticSegmentationEnabled(_ enabled: Bool) {
+        automaticSegmentationEnabled = enabled
+    }
+#else
+    public func requestSegmentation(for detectionID: UUID) {}
+    public func setAutomaticSegmentationEnabled(_ enabled: Bool) {}
 #endif
 
     private func startAuxiliaryModelLoad(geminiAPIKey: String?) {
@@ -244,10 +252,16 @@ public final class DetectionVM: ObservableObject {
     @MainActor
     private func evaluateSegmentationTriggers(_ detections: [Detection], pixelBuffer: CVPixelBuffer, timestamp: Date) {
         guard let service = segmentationService else { return }
-        let candidate = detections.first(where: { userRequestedSegmentationIDs.contains($0.id) })
-            ?? detections.first(where: {
+        let candidate: Detection?
+        if let manual = detections.first(where: { userRequestedSegmentationIDs.contains($0.id) }) {
+            candidate = manual
+        } else if automaticSegmentationEnabled {
+            candidate = detections.first(where: {
                 $0.confidence >= segmentationConfidenceGate && boundingBoxArea($0.boundingBox) <= segmentationAreaGate
             })
+        } else {
+            candidate = nil
+        }
         guard let target = candidate else { return }
         if pendingSegmentationDetections.contains(target.id) { return }
         let wasUserRequested = userRequestedSegmentationIDs.contains(target.id)
