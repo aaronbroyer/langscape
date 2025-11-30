@@ -479,15 +479,19 @@ public actor SegmentationService {
             y: clamp(samRect.maxY, upperBound: targetHeight)
         )
 
-        let coords = try MLMultiArray(shape: [1, 2, 2] as [NSNumber], dataType: .float32)
-        coords[[0, 0, 0] as [NSNumber]] = NSNumber(value: Float(topLeft.x))
-        coords[[0, 0, 1] as [NSNumber]] = NSNumber(value: Float(topLeft.y))
-        coords[[0, 1, 0] as [NSNumber]] = NSNumber(value: Float(bottomRight.x))
-        coords[[0, 1, 1] as [NSNumber]] = NSNumber(value: Float(bottomRight.y))
+        let coords = try MLMultiArray(shape: [1, 2, 2] as [NSNumber], dataType: .float16)
+        coords.withUnsafeMutableBufferPointer(ofType: Float16.self) { buffer, _ in
+            buffer[0] = Float16(Float(topLeft.x))
+            buffer[1] = Float16(Float(topLeft.y))
+            buffer[2] = Float16(Float(bottomRight.x))
+            buffer[3] = Float16(Float(bottomRight.y))
+        }
 
-        let labels = try MLMultiArray(shape: [1, 2] as [NSNumber], dataType: .int32)
-        labels[[0, 0] as [NSNumber]] = NSNumber(value: 2)
-        labels[[0, 1] as [NSNumber]] = NSNumber(value: 3)
+        let labels = try MLMultiArray(shape: [1, 2] as [NSNumber], dataType: .float16)
+        labels.withUnsafeMutableBufferPointer(ofType: Float16.self) { buffer, _ in
+            buffer[0] = Float16(2)
+            buffer[1] = Float16(3)
+        }
 
         return (coords, labels)
     }
