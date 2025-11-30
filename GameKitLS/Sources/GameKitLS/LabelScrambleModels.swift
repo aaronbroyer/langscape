@@ -25,6 +25,7 @@ public struct DetectedObject: Identifiable, Equatable, Sendable {
 
     public init(from detection: Detection) {
         self.init(
+            id: detection.id,
             sourceLabel: detection.label,
             displayLabel: detection.label.capitalized,
             boundingBox: detection.boundingBox,
@@ -34,7 +35,7 @@ public struct DetectedObject: Identifiable, Equatable, Sendable {
 
     public func updating(from detection: Detection) -> DetectedObject {
         DetectedObject(
-            id: id,
+            id: detection.id,
             sourceLabel: sourceLabel,
             displayLabel: detection.label.capitalized,
             boundingBox: detection.boundingBox,
@@ -85,13 +86,28 @@ public struct Round: Identifiable, Equatable, Sendable {
 
     public func updating(with detections: [Detection]) -> Round {
         let grouped = Dictionary(grouping: detections, by: { $0.label.lowercased() })
+        var replacements: [DetectedObject.ID: DetectedObject.ID] = [:]
         let updatedObjects: [DetectedObject] = objects.map { object in
-            guard let candidates = grouped[object.sourceLabel.lowercased()], let match = candidates.max(by: { $0.confidence < $1.confidence }) else {
+            guard let candidates = grouped[object.sourceLabel.lowercased()],
+                  let match = candidates.max(by: { $0.confidence < $1.confidence }) else {
                 return object
             }
-            return object.updating(from: match)
+            let refreshed = object.updating(from: match)
+            if refreshed.id != object.id {
+                replacements[object.id] = refreshed.id
+            }
+            return refreshed
         }
-        return Round(id: id, objects: updatedObjects, labels: labels)
+        if replacements.isEmpty {
+            return Round(id: id, objects: updatedObjects, labels: labels)
+        }
+        let updatedLabels: [Label] = labels.map { label in
+            guard let newObjectID = replacements[label.objectID] else {
+                return label
+            }
+            return Label(id: label.id, text: label.text, sourceLabel: label.sourceLabel, objectID: newObjectID)
+        }
+        return Round(id: id, objects: updatedObjects, labels: updatedLabels)
     }
 }
 

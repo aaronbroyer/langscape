@@ -93,7 +93,7 @@ public actor SegmentationService {
         self.logger = logger
 #if canImport(CoreML)
         let encoderConfiguration = MLModelConfiguration()
-        encoderConfiguration.computeUnits = .all
+        encoderConfiguration.computeUnits = .cpuAndGPU
         self.encoderConfiguration = encoderConfiguration
 
         let promptConfiguration = MLModelConfiguration()
@@ -101,7 +101,7 @@ public actor SegmentationService {
         self.promptConfiguration = promptConfiguration
 
         let decoderConfiguration = MLModelConfiguration()
-        decoderConfiguration.computeUnits = .all
+        decoderConfiguration.computeUnits = .cpuAndGPU
         self.decoderConfiguration = decoderConfiguration
 #endif
     }
@@ -119,6 +119,11 @@ public actor SegmentationService {
 
         let task = Task {
             await logger.log("SegmentationService.prepare: ENTRY", level: .debug, category: "SegmentationKit.SAM")
+            await logger.log(
+                "SegmentationService.prepare: computeUnits encoder=\(encoderConfiguration.computeUnits.rawValue) prompt=\(promptConfiguration.computeUnits.rawValue) decoder=\(decoderConfiguration.computeUnits.rawValue)",
+                level: .debug,
+                category: "SegmentationKit.SAM"
+            )
             let bundle = Bundle.module
 
             await logger.log("SegmentationService.prepare: loading encoder...", level: .debug, category: "SegmentationKit.SAM")
