@@ -438,31 +438,36 @@ public actor SegmentationService {
             width: max(originalSize.width, 1),
             height: max(originalSize.height, 1)
         )
-        let normalized = CGRect(
+        var normalized = CGRect(
             x: prompt.minX / safeOriginal.width,
             y: prompt.minY / safeOriginal.height,
             width: prompt.width / safeOriginal.width,
             height: prompt.height / safeOriginal.height
         )
-        let minX = min(max(normalized.minX, 0), 1)
-        let minY = min(max(normalized.minY, 0), 1)
-        let maxX = min(max(normalized.maxX, 0), 1)
-        let maxY = min(max(normalized.maxY, 0), 1)
-        let clampedNormalized = CGRect(
+        let clampUnit: (CGFloat) -> CGFloat = { value in
+            return min(max(value, 0), 1)
+        }
+        let minX = clampUnit(normalized.minX)
+        let maxX = clampUnit(normalized.maxX)
+        let minYTop = clampUnit(normalized.minY)
+        let maxYTop = clampUnit(normalized.maxY)
+        normalized = CGRect(
             x: minX,
-            y: minY,
+            y: minYTop,
             width: max(maxX - minX, 0.001),
-            height: max(maxY - minY, 0.001)
+            height: max(maxYTop - minYTop, 0.001)
         )
 
         let targetWidth = max(inputImageSize.width, 1)
         let targetHeight = max(inputImageSize.height, 1)
         let padding: CGFloat = 10
+        let flippedMinY = clampUnit(1 - (normalized.origin.y + normalized.size.height))
+        let flippedMaxY = clampUnit(1 - normalized.origin.y)
         var samRect = CGRect(
-            x: clampedNormalized.minX * targetWidth,
-            y: clampedNormalized.minY * targetHeight,
-            width: clampedNormalized.width * targetWidth,
-            height: clampedNormalized.height * targetHeight
+            x: normalized.minX * targetWidth,
+            y: flippedMinY * targetHeight,
+            width: normalized.width * targetWidth,
+            height: (flippedMaxY - flippedMinY) * targetHeight
         ).insetBy(dx: -padding, dy: -padding)
 
         func clamp(_ value: CGFloat, upperBound: CGFloat) -> CGFloat {
