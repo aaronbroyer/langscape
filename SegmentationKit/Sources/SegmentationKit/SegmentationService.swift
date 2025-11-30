@@ -82,8 +82,8 @@ public actor SegmentationService {
         if encoder != nil, decoder != nil { return }
 
         let bundle = Bundle.module
-        self.encoder = try await loadModel(named: "SAM2_1SmallImageEncoderFLOAT16", in: bundle)
-        self.decoder = try await loadModel(named: "SAM2_1SmallMaskDecoderFLOAT16", in: bundle)
+        self.encoder = try loadModel(named: "SAM2_1SmallImageEncoderFLOAT16", in: bundle)
+        self.decoder = try loadModel(named: "SAM2_1SmallMaskDecoderFLOAT16", in: bundle)
         #else
         throw SegmentationServiceError.unsupportedPlatform
         #endif
@@ -112,7 +112,7 @@ public actor SegmentationService {
         guard let embeddings = cachedEmbeddings else {
             throw SegmentationServiceError.failedToCreateEmbeddings
         }
-        return try await runDecoder(
+        return try runDecoder(
             embeddings: embeddings,
             prompt: request.prompt,
             originalSize: request.imageSize,
@@ -141,7 +141,7 @@ public actor SegmentationService {
     }
 
     @discardableResult
-    private func runEncoder(_ pixelBuffer: CVPixelBuffer) async throws -> MLMultiArray {
+    private func runEncoder(_ pixelBuffer: CVPixelBuffer) throws -> MLMultiArray {
         guard let encoder else { throw SegmentationServiceError.encoderUnavailable }
         let inputKey = encoder.modelDescription.imageInputKey
         let outputKey = encoder.modelDescription.multiArrayOutputKey
@@ -157,7 +157,7 @@ public actor SegmentationService {
         return embeddings
     }
 
-    private func runDecoder(embeddings: MLMultiArray, prompt: CGRect, originalSize: CGSize, inputImageSize: CGSize) async throws -> CIImage {
+    private func runDecoder(embeddings: MLMultiArray, prompt: CGRect, originalSize: CGSize, inputImageSize: CGSize) throws -> CIImage {
         guard let decoder else { throw SegmentationServiceError.decoderUnavailable }
 
         let embeddingsKey = "image_embeddings"
