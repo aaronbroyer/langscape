@@ -79,6 +79,8 @@ public final class DetectionVM: ObservableObject {
     private let segmentationFailureLimit = 3
     private let segmentationFailureBackoff: TimeInterval = 10
     private var segmentedObjectIDs: Set<UUID> = []
+    private var segmentationPrepared = false
+    private var segmentationPrepareTask: Task<Void, Never>?
 #endif
     private let maxInFlightRequests = 3
     private var inFlightRequests = 0
@@ -105,6 +107,11 @@ public final class DetectionVM: ObservableObject {
         _ = segmentationServiceBox
 #endif
         startAuxiliaryModelLoad(geminiAPIKey: geminiAPIKey)
+#if canImport(SegmentationKit) && canImport(CoreVideo)
+        if let serviceObject = segmentationServiceBox {
+            startSegmentationPreparation(serviceObject: serviceObject)
+        }
+#endif
     }
 
 #if canImport(SegmentationKit) && canImport(CoreVideo)
@@ -297,6 +304,30 @@ public final class DetectionVM: ObservableObject {
         }
     }
 
+#if canImport(SegmentationKit) && canImport(CoreVideo)
+    private func startSegmentationPreparation(serviceObject: AnyObject) {
+        guard #available(iOS 17.0, macOS 15.0, tvOS 17.0, watchOS 10.0, *),
+              let service = serviceObject as? SegmentationService else { return }
+        segmentationPrepareTask?.cancel()
+        segmentationPrepared = false
+        segmentationPrepareTask = Task { [weak self] in
+            do {
+                try await service.prepare()
+                await MainActor.run {
+                    guard let self else { return }
+                    self.segmentationPrepared = true
+                }
+                await self?.logger.log("SegmentationService prepared", level: .info, category: "DetectionKit.DetectionVM")
+            } catch {
+                await self?.logger.log("SegmentationService prepare failed: \(error.localizedDescription)", level: .error, category: "DetectionKit.DetectionVM")
+            }
+            await MainActor.run { [weak self] in
+                self?.segmentationPrepareTask = nil
+            }
+        }
+    }
+#endif
+
     nonisolated private static func prepareAuxiliaryModels(logger: Logger, geminiAPIKey: String?) async -> (referee: VLMReferee?, refiner: ClassificationRefiner?) {
         var loadedReferee: VLMReferee?
         var loadedRefiner: ClassificationRefiner?
@@ -336,6 +367,12 @@ public final class DetectionVM: ObservableObject {
     private func evaluateSegmentationTriggers(_ detections: [Detection], pixelBuffer: CVPixelBuffer, timestamp: Date) {
         guard #available(iOS 17.0, macOS 15.0, tvOS 17.0, watchOS 10.0, *),
               let service = segmentationServiceBox as? SegmentationService else { return }
+        if !segmentationPrepared {
+            if segmentationPrepareTask == nil {
+                startSegmentationPreparation(serviceObject: service)
+            }
+            return
+        }
         if segmentationDisabled { return }
         if let suspendUntil = segmentationSuspendUntil, Date() < suspendUntil { return }
         let candidate: Detection?

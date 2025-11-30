@@ -16,6 +16,9 @@ import UIKit
 #if canImport(ImageIO)
 import ImageIO
 #endif
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 private typealias DetectionRect = DetectionKit.NormalizedRect
 
@@ -27,6 +30,9 @@ struct CameraPreviewView: View {
     @State private var showCompletionFlash = false
     @State private var homeCardPressed = false
     @State private var startPulse = false
+#if canImport(CoreImage)
+    private static let maskCache = DetectionOverlayMaskCache()
+#endif
 
     var body: some View {
         GeometryReader { proxy in
@@ -394,11 +400,41 @@ struct CameraPreviewView: View {
         gameViewModel.beginScanning()
     }
 
+    private func shouldShowDetectionOverlay(for phase: LabelScrambleVM.Phase) -> Bool {
+        switch phase {
+        case .playing, .paused, .completed:
+            return false
+        default:
+            return true
+        }
+    }
+
     private func detectionOverlay(for detections: [Detection], in size: CGSize) -> some View {
-        print("CameraPreviewView.detectionOverlay: Rendering \(detections.count) detections (overlay disabled)")
-        return Color.clear
-            .frame(width: size.width, height: size.height)
-            .allowsHitTesting(false)
+        let showOverlay = shouldShowDetectionOverlay(for: gameViewModel.phase)
+        let overlays = detections.compactMap { detection -> DetectionOverlayDrawable? in
+            let frame = boundingRect(for: detection, in: size)
+            guard frame.width > 2, frame.height > 2 else { return nil }
+            return DetectionOverlayDrawable(detection: detection, frame: frame)
+        }
+        let cameraFrame = cameraFrameRect(in: size)
+#if canImport(CoreImage)
+        let maskIDs = Set(viewModel.segmentationMasks.keys)
+        Self.maskCache.prune(keeping: maskIDs)
+        let masks: [SegmentationMaskDrawable] = viewModel.segmentationMasks.compactMap { entry in
+            let (id, mask) = entry
+            guard let cgImage = Self.maskCache.image(for: id, mask: mask) else { return nil }
+            return SegmentationMaskDrawable(id: id, cgImage: cgImage)
+        }
+#else
+        let masks: [SegmentationMaskDrawable] = []
+#endif
+        return DetectionOverlayLayer(
+            overlays: overlays,
+            masks: masks,
+            cameraFrame: cameraFrame,
+            viewSize: size,
+            showOverlay: showOverlay
+        )
     }
 
     private func boundingRect(for detection: Detection, in viewSize: CGSize) -> CGRect {
@@ -436,6 +472,124 @@ struct CameraPreviewView: View {
         }
     }
 }
+
+private struct DetectionOverlayDrawable: Identifiable {
+    let detection: Detection
+    let frame: CGRect
+
+    var id: UUID { detection.id }
+}
+
+private struct SegmentationMaskDrawable: Identifiable {
+    let id: UUID
+    let cgImage: CGImage
+}
+
+private struct DetectionOverlayLayer: View {
+    let overlays: [DetectionOverlayDrawable]
+    let masks: [SegmentationMaskDrawable]
+    let cameraFrame: CGRect?
+    let viewSize: CGSize
+    let showOverlay: Bool
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if showOverlay, let cameraFrame, !masks.isEmpty {
+                ForEach(masks) { mask in
+                    Image(decorative: mask.cgImage, scale: 1, orientation: .up)
+                        .resizable()
+                        .interpolation(.high)
+                        .antialiased(true)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: cameraFrame.width, height: cameraFrame.height)
+                        .position(x: cameraFrame.midX, y: cameraFrame.midY)
+                        .blendMode(.plusLighter)
+                        .opacity(0.9)
+                }
+            }
+
+            if showOverlay {
+                ForEach(overlays) { overlay in
+                    DetectionBoundingBoxView(
+                        frame: overlay.frame,
+                        label: overlay.detection.label,
+                        confidence: overlay.detection.confidence
+                    )
+                }
+            }
+        }
+        .frame(width: viewSize.width, height: viewSize.height)
+        .allowsHitTesting(false)
+        .opacity(showOverlay ? 1 : 0)
+        .animation(.easeInOut(duration: 0.18), value: showOverlay)
+    }
+}
+
+private struct DetectionBoundingBoxView: View {
+    let frame: CGRect
+    let label: String
+    let confidence: Double
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .stroke(Color.white.opacity(0.95), lineWidth: 2)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.black.opacity(0.25))
+            )
+            .overlay(alignment: .topLeading) {
+                DetectionBadgeView(label: label, confidence: confidence)
+                    .offset(x: 6, y: -26)
+            }
+            .frame(width: frame.width, height: frame.height)
+            .position(x: frame.midX, y: frame.midY)
+            .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: 6)
+    }
+}
+
+private struct DetectionBadgeView: View {
+    let label: String
+    let confidence: Double
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label.capitalized)
+                .font(Typography.caption.font.weight(.semibold))
+                .lineLimit(1)
+            Text("\(Int(confidence * 100))%")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .opacity(0.85)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.8), in: Capsule())
+        .foregroundStyle(Color.white)
+    }
+}
+
+#if canImport(CoreImage)
+private final class DetectionOverlayMaskCache {
+    private let context = CIContext()
+    private var cache: [UUID: CGImage] = [:]
+
+    func image(for id: UUID, mask: CIImage) -> CGImage? {
+        if let cached = cache[id] {
+            return cached
+        }
+        guard let cgImage = context.createCGImage(mask, from: mask.extent) else { return nil }
+        cache[id] = cgImage
+        return cgImage
+    }
+
+    func prune(keeping ids: Set<UUID>) {
+        guard !ids.isEmpty else {
+            cache.removeAll()
+            return
+        }
+        cache = cache.filter { ids.contains($0.key) }
+    }
+}
+#endif
 
 private struct RoundPlayLayer: View {
     let round: Round

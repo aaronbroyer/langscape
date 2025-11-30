@@ -76,6 +76,7 @@ public actor SegmentationService {
     private var encoder: MLModel?
     private var promptEncoder: MLModel?
     private var decoder: MLModel?
+    private var prepareTask: Task<Void, Error>?
     private let ciContext = CIContext()
     private let targetImageSize = CGSize(width: 1024, height: 1024)
 #if canImport(CoreVideo)
@@ -98,28 +99,43 @@ public actor SegmentationService {
     /// Loads encoder/decoder into memory. Safe to call multiple times.
     public func prepare() async throws {
         #if canImport(CoreML)
-        await logger.log("SegmentationService.prepare: ENTRY", level: .debug, category: "SegmentationKit.SAM")
+        if let task = prepareTask {
+            try await task.value
+            return
+        }
         if encoder != nil, decoder != nil, promptEncoder != nil {
-            await logger.log("SegmentationService.prepare: models already loaded, returning early", level: .debug, category: "SegmentationKit.SAM")
             return
         }
 
-        await logger.log("SegmentationService.prepare: loading models...", level: .debug, category: "SegmentationKit.SAM")
-        let bundle = Bundle.module
+        let task = Task {
+            await logger.log("SegmentationService.prepare: ENTRY", level: .debug, category: "SegmentationKit.SAM")
+            let bundle = Bundle.module
 
-        await logger.log("SegmentationService.prepare: loading encoder...", level: .debug, category: "SegmentationKit.SAM")
-        self.encoder = try loadModel(named: "SAM2_1SmallImageEncoderFLOAT16", in: bundle)
-        await logger.log("SegmentationService.prepare: encoder loaded", level: .debug, category: "SegmentationKit.SAM")
+            await logger.log("SegmentationService.prepare: loading encoder...", level: .debug, category: "SegmentationKit.SAM")
+            let encoderModel = try loadModel(named: "SAM2_1SmallImageEncoderFLOAT16", in: bundle)
+            await logger.log("SegmentationService.prepare: encoder loaded", level: .debug, category: "SegmentationKit.SAM")
 
-        await logger.log("SegmentationService.prepare: loading promptEncoder...", level: .debug, category: "SegmentationKit.SAM")
-        self.promptEncoder = try loadModel(named: "SAM2_1SmallPromptEncoderFLOAT16", in: bundle)
-        await logger.log("SegmentationService.prepare: promptEncoder loaded", level: .debug, category: "SegmentationKit.SAM")
+            await logger.log("SegmentationService.prepare: loading promptEncoder...", level: .debug, category: "SegmentationKit.SAM")
+            let promptModel = try loadModel(named: "SAM2_1SmallPromptEncoderFLOAT16", in: bundle)
+            await logger.log("SegmentationService.prepare: promptEncoder loaded", level: .debug, category: "SegmentationKit.SAM")
 
-        await logger.log("SegmentationService.prepare: loading decoder...", level: .debug, category: "SegmentationKit.SAM")
-        self.decoder = try loadModel(named: "SAM2_1SmallMaskDecoderFLOAT16", in: bundle)
-        await logger.log("SegmentationService.prepare: decoder loaded", level: .debug, category: "SegmentationKit.SAM")
+            await logger.log("SegmentationService.prepare: loading decoder...", level: .debug, category: "SegmentationKit.SAM")
+            let decoderModel = try loadModel(named: "SAM2_1SmallMaskDecoderFLOAT16", in: bundle)
+            await logger.log("SegmentationService.prepare: decoder loaded", level: .debug, category: "SegmentationKit.SAM")
 
-        await logger.log("SegmentationService.prepare: all models loaded successfully", level: .info, category: "SegmentationKit.SAM")
+            self.encoder = encoderModel
+            self.promptEncoder = promptModel
+            self.decoder = decoderModel
+            await logger.log("SegmentationService.prepare: all models loaded successfully", level: .info, category: "SegmentationKit.SAM")
+        }
+        prepareTask = task
+        do {
+            try await task.value
+        } catch {
+            prepareTask = nil
+            throw error
+        }
+        prepareTask = nil
         #else
         throw SegmentationServiceError.unsupportedPlatform
         #endif
