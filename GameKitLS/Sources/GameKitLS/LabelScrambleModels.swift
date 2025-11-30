@@ -85,9 +85,13 @@ public struct Round: Identifiable, Equatable, Sendable {
     }
 
     public func updating(with detections: [Detection]) -> Round {
+        let detectionLookup = Dictionary(uniqueKeysWithValues: detections.map { ($0.id, $0) })
         let grouped = Dictionary(grouping: detections, by: { $0.label.lowercased() })
         var replacements: [DetectedObject.ID: DetectedObject.ID] = [:]
         let updatedObjects: [DetectedObject] = objects.map { object in
+            if let directMatch = detectionLookup[object.id] {
+                return object.updating(from: directMatch)
+            }
             guard let candidates = grouped[object.sourceLabel.lowercased()],
                   let match = candidates.max(by: { $0.confidence < $1.confidence }) else {
                 return object
