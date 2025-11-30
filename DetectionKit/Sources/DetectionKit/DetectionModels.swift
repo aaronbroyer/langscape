@@ -43,3 +43,29 @@ public struct Detection: Sendable, Identifiable, Equatable {
         self.boundingBox = boundingBox
     }
 }
+
+public struct DetectionTrackSnapshot: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public let label: String
+    public let confidence: Double
+    public let boundingBox: NormalizedRect
+    public let updatedAt: Date
+
+    public init(id: UUID, label: String, confidence: Double, boundingBox: NormalizedRect, updatedAt: Date) {
+        self.id = id
+        self.label = label
+        self.confidence = confidence
+        self.boundingBox = boundingBox
+        self.updatedAt = updatedAt
+    }
+
+    public init(detection: Detection, updatedAt: Date = Date()) {
+        self.init(
+            id: detection.id,
+            label: detection.label,
+            confidence: detection.confidence,
+            boundingBox: detection.boundingBox,
+            updatedAt: updatedAt
+        )
+    }
+}

@@ -46,6 +46,7 @@ public struct Published<Value> {
 @MainActor
 public final class DetectionVM: ObservableObject {
     @Published public private(set) var detections: [Detection] = []
+    @Published public private(set) var trackSnapshots: [DetectionTrackSnapshot] = []
     @Published public private(set) var fps: Double = 0
     @Published public private(set) var lastError: DetectionError?
     @Published public private(set) var inputImageSize: CGSize?
@@ -67,6 +68,8 @@ public final class DetectionVM: ObservableObject {
     private var droppedFrames = 0
     private let fpsWindow: TimeInterval
     private var auxiliaryLoadTask: Task<Void, Never>?
+    private var trackState: [UUID: DetectionTrackSnapshot] = [:]
+    private let trackRetentionDuration: TimeInterval = 2.5
 #if canImport(SegmentationKit) && canImport(CoreVideo)
     private let segmentationServiceBox: AnyObject?
     private var pendingSegmentationDetections: Set<UUID> = []
@@ -227,10 +230,7 @@ public final class DetectionVM: ObservableObject {
                 await MainActor.run {
                     viewModel.detections = detections
                     viewModel.lastError = nil
-#if canImport(CoreImage)
-                    let activeIDs = Set(detections.map { $0.id })
-                    viewModel.segmentationMasks = viewModel.segmentationMasks.filter { activeIDs.contains($0.key) }
-#endif
+                    viewModel.updateTrackSnapshots(with: detections, timestamp: request.timestamp)
                     viewModel.registerFrame(timestamp: request.timestamp)
                 }
                 await logger.log("Processed frame \(request.id) with \(countForLog) detections: [\(labelsForLog)]", level: .debug, category: "DetectionKit.DetectionVM")
@@ -284,7 +284,7 @@ public final class DetectionVM: ObservableObject {
     }
 
     public func consumeSegmentationMask(for detectionID: UUID) {
-        segmentationMasks.removeValue(forKey: detectionID)
+        // Masks persist per track; no manual consumption.
     }
 #else
     public func requestSegmentation(for detectionID: UUID) {}
@@ -298,7 +298,8 @@ public final class DetectionVM: ObservableObject {
         auxiliaryLoadTask?.cancel()
         let logger = self.logger
         auxiliaryLoadTask = Task(priority: .utility) { [weak self] in
-            let result = await DetectionVM.prepareAuxiliaryModels(logger: logger, geminiAPIKey: geminiAPIKey, loadReferee: auxiliaryRefereeEnabled)
+            let loadReferee = self?.auxiliaryRefereeEnabled ?? false
+            let result = await DetectionVM.prepareAuxiliaryModels(logger: logger, geminiAPIKey: geminiAPIKey, loadReferee: loadReferee)
             guard let self else { return }
             self.referee = result.referee
             self.refiner = result.refiner
@@ -480,6 +481,23 @@ public final class DetectionVM: ObservableObject {
 
     private func finishInFlightRequest() {
         inFlightRequests = max(0, inFlightRequests - 1)
+    }
+
+    @MainActor
+    private func updateTrackSnapshots(with detections: [Detection], timestamp: Date) {
+        for detection in detections {
+            trackState[detection.id] = DetectionTrackSnapshot(detection: detection, updatedAt: timestamp)
+        }
+
+        let expirationThreshold = timestamp.addingTimeInterval(-trackRetentionDuration)
+        trackState = trackState.filter { $0.value.updatedAt >= expirationThreshold }
+
+#if canImport(CoreImage)
+        let activeIDs = Set(trackState.keys)
+        segmentationMasks = segmentationMasks.filter { activeIDs.contains($0.key) }
+#endif
+
+        trackSnapshots = trackState.values.sorted(by: { $0.updatedAt > $1.updatedAt })
     }
 
     private func registerFrame(timestamp: Date) {
