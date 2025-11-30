@@ -78,6 +78,7 @@ public final class DetectionVM: ObservableObject {
     private var segmentationDisabled = false
     private let segmentationFailureLimit = 3
     private let segmentationFailureBackoff: TimeInterval = 10
+    private var segmentedObjectIDs: Set<UUID> = []
 #endif
     private let maxInFlightRequests = 3
     private var inFlightRequests = 0
@@ -261,6 +262,10 @@ public final class DetectionVM: ObservableObject {
 
 #if canImport(SegmentationKit) && canImport(CoreVideo)
     public func requestSegmentation(for detectionID: UUID) {
+        guard !segmentedObjectIDs.contains(detectionID) else {
+            Task { await logger.log("Segmentation already completed for \(detectionID), ignoring request.", level: .debug, category: "DetectionKit.DetectionVM") }
+            return
+        }
         userRequestedSegmentationIDs.insert(detectionID)
         let label = detections.first(where: { $0.id == detectionID })?.label ?? "unknown"
         Task { await logger.log("Segmentation manually requested for \(label) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM") }
@@ -269,9 +274,16 @@ public final class DetectionVM: ObservableObject {
     public func setAutomaticSegmentationEnabled(_ enabled: Bool) {
         automaticSegmentationEnabled = enabled
     }
+
+    public func consumeSegmentationMask(for detectionID: UUID) {
+        segmentationMasks.removeValue(forKey: detectionID)
+    }
 #else
     public func requestSegmentation(for detectionID: UUID) {}
     public func setAutomaticSegmentationEnabled(_ enabled: Bool) {}
+#if canImport(CoreImage)
+    public func consumeSegmentationMask(for detectionID: UUID) {}
+#endif
 #endif
 
     private func startAuxiliaryModelLoad(geminiAPIKey: String?) {
@@ -344,7 +356,7 @@ public final class DetectionVM: ObservableObject {
                 Task { await logger.log("Segmentation: cleared \(staleRequests.count) stale requests", level: .debug, category: "DetectionKit.DetectionVM") }
             }
         }
-        guard let target = candidate else { return }
+        guard let target = candidate, !segmentedObjectIDs.contains(target.id) else { return }
         if pendingSegmentationDetections.contains(target.id) { return }
         let wasUserRequested = userRequestedSegmentationIDs.contains(target.id)
         if wasUserRequested {
@@ -371,12 +383,13 @@ public final class DetectionVM: ObservableObject {
                 await self.logger.log("Segmentation starting for \(detectionLabel) (\(reason)) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
                 let mask = try await service.segment(request)
                 await MainActor.run {
-                    #if canImport(CoreImage)
+#if canImport(CoreImage)
                     self.segmentationMasks[detectionID] = mask
-                    #endif
+#endif
                     self.pendingSegmentationDetections.remove(detectionID)
                     self.segmentationFailureCount = 0
                     self.segmentationSuspendUntil = nil
+                    self.segmentedObjectIDs.insert(detectionID)
                 }
                 await self.logger.log("Segmentation mask ready for \(detectionLabel)", level: .info, category: "DetectionKit.DetectionVM")
             } catch {

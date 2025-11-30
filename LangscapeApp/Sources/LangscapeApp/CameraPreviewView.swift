@@ -770,7 +770,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             clearAnchors(from: arView)
             return
         }
-        guard !segmentationMasks.isEmpty, let inputImageSize, let frame = arView.session.currentFrame else {
+        guard let inputImageSize, let frame = arView.session.currentFrame else {
             clearAnchors(from: arView)
             return
         }
@@ -782,26 +782,34 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         }
 
         let detectionLookup = Dictionary(uniqueKeysWithValues: detections.map { ($0.id, $0) })
-        var activeOverlayIDs: Set<UUID> = []
+        let activeOverlayIDs: Set<UUID> = Set(
+            detections
+                .filter { pendingLabels.contains($0.label.lowercased()) }
+                .map(\.id)
+        )
 
-        for (maskID, mask) in segmentationMasks {
-            guard let detection = detectionLookup[maskID] else { continue }
-            guard pendingLabels.contains(detection.label.lowercased()) else { continue }
-            guard let viewRect = projectedRect(for: detection.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size) else { continue }
-            guard viewRect.width > 2, viewRect.height > 2 else { continue }
-            guard let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView) else { continue }
-            let depth = distanceFromCamera(to: raycastResult.worldTransform.translation, camera: frame.camera)
-            guard let planeSize = planeSizeInMeters(for: detection.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera) else { continue }
-            guard let texture = textureCache.texture(for: maskID, mask: mask) else { continue }
-            placeOverlay(
-                id: maskID,
-                texture: texture,
-                size: planeSize,
-                raycastResult: raycastResult,
-                camera: frame.camera,
-                arView: arView
-            )
-            activeOverlayIDs.insert(maskID)
+        if !segmentationMasks.isEmpty {
+            for (maskID, mask) in segmentationMasks {
+                guard let detection = detectionLookup[maskID],
+                      pendingLabels.contains(detection.label.lowercased()),
+                      let viewRect = projectedRect(for: detection.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size),
+                      viewRect.width > 2, viewRect.height > 2,
+                      let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView) else { continue }
+
+                let depth = distanceFromCamera(to: raycastResult.worldTransform.translation, camera: frame.camera)
+                guard let planeSize = planeSizeInMeters(for: detection.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera),
+                      let texture = textureCache.texture(for: maskID, mask: mask) else { continue }
+
+                placeOverlay(
+                    id: maskID,
+                    texture: texture,
+                    size: planeSize,
+                    raycastResult: raycastResult,
+                    camera: frame.camera,
+                    arView: arView
+                )
+                viewModel.consumeSegmentationMask(for: maskID)
+            }
         }
 
         pruneInactiveOverlays(keeping: activeOverlayIDs)

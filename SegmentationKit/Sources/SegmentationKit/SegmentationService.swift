@@ -98,12 +98,28 @@ public actor SegmentationService {
     /// Loads encoder/decoder into memory. Safe to call multiple times.
     public func prepare() async throws {
         #if canImport(CoreML)
-        if encoder != nil, decoder != nil, promptEncoder != nil { return }
+        await logger.log("SegmentationService.prepare: ENTRY", level: .debug, category: "SegmentationKit.SAM")
+        if encoder != nil, decoder != nil, promptEncoder != nil {
+            await logger.log("SegmentationService.prepare: models already loaded, returning early", level: .debug, category: "SegmentationKit.SAM")
+            return
+        }
 
+        await logger.log("SegmentationService.prepare: loading models...", level: .debug, category: "SegmentationKit.SAM")
         let bundle = Bundle.module
+
+        await logger.log("SegmentationService.prepare: loading encoder...", level: .debug, category: "SegmentationKit.SAM")
         self.encoder = try loadModel(named: "SAM2_1SmallImageEncoderFLOAT16", in: bundle)
+        await logger.log("SegmentationService.prepare: encoder loaded", level: .debug, category: "SegmentationKit.SAM")
+
+        await logger.log("SegmentationService.prepare: loading promptEncoder...", level: .debug, category: "SegmentationKit.SAM")
         self.promptEncoder = try loadModel(named: "SAM2_1SmallPromptEncoderFLOAT16", in: bundle)
+        await logger.log("SegmentationService.prepare: promptEncoder loaded", level: .debug, category: "SegmentationKit.SAM")
+
+        await logger.log("SegmentationService.prepare: loading decoder...", level: .debug, category: "SegmentationKit.SAM")
         self.decoder = try loadModel(named: "SAM2_1SmallMaskDecoderFLOAT16", in: bundle)
+        await logger.log("SegmentationService.prepare: decoder loaded", level: .debug, category: "SegmentationKit.SAM")
+
+        await logger.log("SegmentationService.prepare: all models loaded successfully", level: .info, category: "SegmentationKit.SAM")
         #else
         throw SegmentationServiceError.unsupportedPlatform
         #endif
@@ -113,9 +129,15 @@ public actor SegmentationService {
     /// Main entry point triggered by the detection system.
     public func segment(_ request: SegmentationRequest) async throws -> CIImage {
         #if canImport(CoreML)
+        await logger.log("SegmentationService.segment: ENTRY", level: .debug, category: "SegmentationKit.SAM")
         do {
+            await logger.log("SegmentationService.segment: checking models loaded...", level: .debug, category: "SegmentationKit.SAM")
             if encoder == nil || decoder == nil || promptEncoder == nil {
+                await logger.log("SegmentationService.segment: models not loaded, calling prepare()...", level: .debug, category: "SegmentationKit.SAM")
                 try await prepare()
+                await logger.log("SegmentationService.segment: prepare() completed", level: .debug, category: "SegmentationKit.SAM")
+            } else {
+                await logger.log("SegmentationService.segment: models already loaded", level: .debug, category: "SegmentationKit.SAM")
             }
             guard let encoder else { throw SegmentationServiceError.encoderUnavailable }
             guard let promptEncoder else { throw SegmentationServiceError.modelNotFound("SAM prompt encoder missing") }
@@ -126,30 +148,42 @@ public actor SegmentationService {
                 category: "SegmentationKit.SAM"
             )
 
+            await logger.log("SegmentationService: preparing input buffer...", level: .debug, category: "SegmentationKit.SAM")
             let preparedBuffer = try prepareInputBuffer(request.pixelBuffer)
             let inputImageSize = CGSize(width: CVPixelBufferGetWidth(preparedBuffer), height: CVPixelBufferGetHeight(preparedBuffer))
+            await logger.log("SegmentationService: input buffer prepared, size=\(inputImageSize)", level: .debug, category: "SegmentationKit.SAM")
 
             if needsNewEmbeddings(for: request) {
+                await logger.log("SegmentationService: running encoder (NEW embeddings needed)...", level: .debug, category: "SegmentationKit.SAM")
                 cachedImageFeatures = try runEncoder(preparedBuffer, encoder: encoder)
+                await logger.log("SegmentationService: encoder completed", level: .debug, category: "SegmentationKit.SAM")
                 lastFrameFingerprint = fingerprint(for: request.pixelBuffer)
                 lastFrameTimestamp = request.timestamp
+            } else {
+                await logger.log("SegmentationService: using CACHED embeddings", level: .debug, category: "SegmentationKit.SAM")
             }
 
             guard let imageFeatures = cachedImageFeatures else {
                 throw SegmentationServiceError.failedToCreateEmbeddings
             }
 
+            await logger.log("SegmentationService: converting box to prompts...", level: .debug, category: "SegmentationKit.SAM")
             let promptPoints = try convertBoxToPrompts(request.prompt, originalSize: request.imageSize, inputImageSize: inputImageSize)
             let promptLabels = try boxPromptLabels()
+            await logger.log("SegmentationService: running prompt encoder...", level: .debug, category: "SegmentationKit.SAM")
             let promptEmbeddings = try runPromptEncoder(points: promptPoints, labels: promptLabels, promptEncoder: promptEncoder)
+            await logger.log("SegmentationService: prompt encoder completed", level: .debug, category: "SegmentationKit.SAM")
 
-            return try runDecoder(
+            await logger.log("SegmentationService: running decoder...", level: .debug, category: "SegmentationKit.SAM")
+            let result = try runDecoder(
                 imageFeatures: imageFeatures,
                 promptEmbeddings: promptEmbeddings,
                 decoder: decoder,
                 originalSize: request.imageSize,
                 prompt: request.prompt
             )
+            await logger.log("SegmentationService: decoder completed successfully", level: .info, category: "SegmentationKit.SAM")
+            return result
         } catch {
             let nsError = error as NSError
             await logger.log(
@@ -169,6 +203,9 @@ public actor SegmentationService {
 
     #if canImport(CoreML)
     private func loadModel(named resource: String, in bundle: Bundle) throws -> MLModel {
+        // Note: loadModel is called from async context, so we can't await here
+        // Logging happens in the caller (prepare method)
+
         if let compiledURL = bundle.url(forResource: resource, withExtension: "mlmodelc") {
             return try MLModel(contentsOf: compiledURL, configuration: modelConfiguration)
         }
@@ -307,7 +344,7 @@ public actor SegmentationService {
             fullSize: fullSize
         ) {
             let flip = CGAffineTransform(translationX: 0, y: refined.extent.height).scaledBy(x: 1, y: -1)
-            return refined.transformed(by: flip)
+            return stylizeMask(refined.transformed(by: flip))
         }
 #endif
         var maskImage = CIImage(
@@ -326,7 +363,12 @@ public actor SegmentationService {
             .transformed(by: CGAffineTransform(translationX: expandedPrompt.minX, y: expandedPrompt.minY))
             .cropped(to: CGRect(origin: .zero, size: fullSize))
         let flip = CGAffineTransform(translationX: 0, y: maskImage.extent.height).scaledBy(x: 1, y: -1)
-        return maskImage.transformed(by: flip)
+        let transformed = maskImage.transformed(by: flip)
+#if canImport(CoreImage)
+        return stylizeMask(transformed)
+#else
+        return transformed
+#endif
     }
 
     private func prepareInputBuffer(_ buffer: CVPixelBuffer) throws -> CVPixelBuffer {
@@ -527,5 +569,24 @@ private func upscaleAndThresholdMask(
     result = result.cropped(to: CGRect(origin: .zero, size: targetRect.size))
     result = result.transformed(by: CGAffineTransform(translationX: targetRect.minX, y: targetRect.minY))
     return result.cropped(to: CGRect(origin: .zero, size: fullSize))
+}
+
+private func stylizeMask(_ mask: CIImage) -> CIImage {
+    guard
+        let threshold = CIFilter(name: "CIColorMatrix"),
+        let compositor = CIFilter(name: "CISourceAtopCompositing")
+    else {
+        return mask
+    }
+
+    threshold.setValue(mask, forKey: kCIInputImageKey)
+    threshold.setValue(CIVector(x: 0, y: 0, z: 0, w: 20), forKey: "inputAVector")
+    threshold.setValue(CIVector(x: 0, y: 0, z: 0, w: -10), forKey: "inputBiasVector")
+    let clipped = threshold.outputImage?.cropped(to: mask.extent) ?? mask
+
+    let neon = CIImage(color: CIColor(red: 0, green: 1, blue: 1, alpha: 0.85)).cropped(to: mask.extent)
+    compositor.setValue(neon, forKey: kCIInputImageKey)
+    compositor.setValue(clipped, forKey: kCIInputBackgroundImageKey)
+    return compositor.outputImage?.cropped(to: mask.extent) ?? clipped
 }
 #endif
