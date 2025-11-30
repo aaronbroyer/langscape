@@ -9,6 +9,7 @@ build/
 xcuserdata/
 
 .venv*
+.env
 
 # Ultralytics exports at repo root 
 /yolov8*.pt
