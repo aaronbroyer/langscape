@@ -590,7 +590,8 @@ private func upscaleAndThresholdMask(
 private func stylizeMask(_ mask: CIImage) -> CIImage {
     guard
         let threshold = CIFilter(name: "CIColorMatrix"),
-        let compositor = CIFilter(name: "CISourceAtopCompositing")
+        let maskToAlpha = CIFilter(name: "CIMaskToAlpha"),
+        let blend = CIFilter(name: "CIBlendWithMask")
     else {
         return mask
     }
@@ -600,9 +601,14 @@ private func stylizeMask(_ mask: CIImage) -> CIImage {
     threshold.setValue(CIVector(x: 0, y: 0, z: 0, w: -10), forKey: "inputBiasVector")
     let clipped = threshold.outputImage?.cropped(to: mask.extent) ?? mask
 
+    maskToAlpha.setValue(clipped, forKey: kCIInputImageKey)
+    let alphaMask = maskToAlpha.outputImage?.cropped(to: mask.extent) ?? clipped
+
     let neon = CIImage(color: CIColor(red: 0, green: 1, blue: 1, alpha: 0.85)).cropped(to: mask.extent)
-    compositor.setValue(neon, forKey: kCIInputImageKey)
-    compositor.setValue(clipped, forKey: kCIInputBackgroundImageKey)
-    return compositor.outputImage?.cropped(to: mask.extent) ?? clipped
+    let clear = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: mask.extent)
+    blend.setValue(neon, forKey: kCIInputImageKey)
+    blend.setValue(clear, forKey: kCIInputBackgroundImageKey)
+    blend.setValue(alphaMask, forKey: kCIInputMaskImageKey)
+    return blend.outputImage?.cropped(to: mask.extent) ?? neon
 }
 #endif
