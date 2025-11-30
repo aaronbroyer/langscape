@@ -17,25 +17,39 @@ public struct LangscapeLogo: View {
     private let tint: Color
     private let accentTint: Color
     private let assetName: String?
-    private let brand: Brand
 
     public init(style: Style = .full,
                 glyphSize: CGFloat = 56,
                 spacing: CGFloat = 12,
                 tint: Color = ColorPalette.primary.swiftUIColor,
                 accentTint: Color = ColorPalette.accent.swiftUIColor,
-                assetName: String? = nil,
+                assetName: String? = "LangscapeBrandmark",
                 brand: Brand = .chatPin) {
         self.style = style
         self.glyphSize = glyphSize
         self.spacing = spacing
         self.tint = tint
         self.assetName = assetName
-        self.brand = brand
         self.accentTint = accentTint
+        _ = brand
     }
 
     public var body: some View {
+        if let asset = assetImage {
+            asset
+                .renderingMode(.original)
+                .resizable()
+                .interpolation(.high)
+                .antialiased(true)
+                .scaledToFit()
+                .frame(height: glyphSize)
+                .accessibilityLabel("Langscape")
+        } else {
+            legacyBody
+        }
+    }
+
+    private var legacyBody: some View {
         HStack(spacing: style == .full ? spacing : 0) {
             glyph
             if style == .full { wordmark }
@@ -46,19 +60,9 @@ public struct LangscapeLogo: View {
 
     @ViewBuilder
     private var glyph: some View {
-        if let name = assetName, let image = LangscapeLogo.loadImage(named: name) {
-            image
-                .renderingMode(.original)
-                .resizable()
-                .interpolation(.high)
-                .antialiased(true)
-                .scaledToFit()
-                .frame(width: glyphSize, height: glyphSize)
-        } else {
-            GradientCameraPinMark(size: glyphSize,
-                                  strokeColor: tint,
-                                  accentColor: accentTint)
-        }
+        GradientCameraPinMark(size: glyphSize,
+                              strokeColor: tint,
+                              accentColor: accentTint)
     }
 
     private var wordmark: some View {
@@ -66,6 +70,11 @@ public struct LangscapeLogo: View {
             .font(.system(size: glyphSize * 0.52, weight: .semibold, design: .rounded))
             .kerning(0.6)
             .foregroundStyle(tint)
+    }
+
+    private var assetImage: Image? {
+        guard let name = assetName else { return nil }
+        return LangscapeLogo.loadImage(named: name)
     }
 
     private static func loadImage(named name: String) -> Image? {
