@@ -487,19 +487,45 @@ private struct SegmentationOverlayLayer: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             ForEach(masks) { mask in
-                Image(decorative: mask.cgImage, scale: 1, orientation: .up)
-                    .resizable()
-                    .interpolation(.high)
-                    .antialiased(true)
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: cameraFrame.width, height: cameraFrame.height)
-                    .position(x: cameraFrame.midX, y: cameraFrame.midY)
-                    .blendMode(.plusLighter)
-                    .opacity(0.85)
+                glowingMask(for: mask)
             }
         }
         .frame(width: viewSize.width, height: viewSize.height)
         .allowsHitTesting(false)
+    }
+
+    /// Creates a tinted, feathered mask so that we highlight only the segmented pixels instead of blasting solid white blobs.
+    private func glowingMask(for mask: SegmentationMaskDrawable) -> some View {
+        let baseMask = maskImage(for: mask)
+        let glowGradient = LinearGradient(
+            colors: [
+                Color.white.opacity(0.95),
+                ColorPalette.accent.swiftUIColor.opacity(0.9)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+
+        return glowGradient
+            .blendMode(.screen)
+            .mask(baseMask)
+            .overlay(
+                Color.white
+                    .opacity(0.55)
+                    .blur(radius: 14)
+                    .mask(baseMask)
+                    .blendMode(.screen)
+            )
+    }
+
+    private func maskImage(for mask: SegmentationMaskDrawable) -> some View {
+        Image(decorative: mask.cgImage, scale: 1, orientation: .up)
+            .resizable()
+            .interpolation(.high)
+            .antialiased(true)
+            .aspectRatio(contentMode: .fill)
+            .frame(width: cameraFrame.width, height: cameraFrame.height)
+            .position(x: cameraFrame.midX, y: cameraFrame.midY)
     }
 }
 
@@ -810,7 +836,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
     private let logger = Logger.shared
 #if canImport(CoreImage)
     private var glowOverlays: [UUID: GlowOverlay] = [:]
-    private let textureCache = MaskGlowTextureCache()
+    private let textureCache = MaskTextureCache()
 #endif
 
     init(viewModel: DetectionVM, contextManager: ContextManager) {
@@ -975,11 +1001,11 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         let width = max(size.x, 0.3)
         let height = max(size.y, 0.3)
         let mesh = MeshResource.generatePlane(width: width, height: height)
+
         var material = UnlitMaterial()
-        material.color = .init(tint: UIColor.systemCyan.withAlphaComponent(0.9))
+        material.color = .init(tint: UIColor.systemCyan.withAlphaComponent(0.85))
         let opacityTexture = MaterialParameters.Texture(texture)
-        let opacity = PhysicallyBasedMaterial.Opacity(texture: opacityTexture)
-        material.blending = .transparent(opacity: opacity)
+        material.blending = .transparent(opacity: .init(texture: opacityTexture))
 
         let transform = Transform(matrix: raycastResult.worldTransform)
         let cameraPosition = camera.transform.translation
@@ -1067,34 +1093,19 @@ private struct GlowOverlay {
     let entity: ModelEntity
 }
 
-private final class MaskGlowTextureCache {
+private final class MaskTextureCache {
     private let ciContext = CIContext()
     private var cache: [UUID: TextureResource] = [:]
-    private let options = TextureResource.CreateOptions(semantic: .color)
-    private static let edgeGlowKernel: CIColorKernel? = {
-        let kernel = """
-        kernel vec4 edgeGlow(sampler maskSampler) {
-            vec2 coord = destCoord();
-            float center = clamp(sample(maskSampler, samplerCoord(maskSampler, coord)).a, 0.0, 1.0);
-            float north = sample(maskSampler, samplerCoord(maskSampler, coord + vec2(0.0, -1.0))).a;
-            float south = sample(maskSampler, samplerCoord(maskSampler, coord + vec2(0.0, 1.0))).a;
-            float east = sample(maskSampler, samplerCoord(maskSampler, coord + vec2(1.0, 0.0))).a;
-            float west = sample(maskSampler, samplerCoord(maskSampler, coord + vec2(-1.0, 0.0))).a;
-            float maxNeighbor = max(max(north, south), max(east, west));
-            float diff = max(0.0, maxNeighbor - center);
-            float edge = smoothstep(0.02, 0.25, diff);
-            return vec4(0.0, 0.0, 0.0, edge);
-        }
-        """
-        return CIColorKernel(source: kernel)
-    }()
+    private let options = TextureResource.CreateOptions(semantic: .raw)
 
     func texture(for id: UUID, mask: CIImage) -> TextureResource? {
         if let cached = cache[id] {
             return cached
         }
-        guard let glowImage = makeGlowImage(from: mask),
-              let texture = try? TextureResource.generate(from: glowImage, options: options) else {
+        guard let cgImage = ciContext.createCGImage(mask, from: mask.extent) else {
+            return nil
+        }
+        guard let texture = try? TextureResource.generate(from: cgImage, options: options) else {
             return nil
         }
         cache[id] = texture
@@ -1111,33 +1122,6 @@ private final class MaskGlowTextureCache {
 
     func removeAll() {
         cache.removeAll()
-    }
-
-    private func makeGlowImage(from mask: CIImage) -> CGImage? {
-        let normalized = mask
-            .applyingFilter("CIColorControls", parameters: ["inputBrightness": -0.08, "inputContrast": 1.35])
-        let alphaMask = normalized.applyingFilter("CIMaskToAlpha")
-        let edgeMask = MaskGlowTextureCache.edgeGlowKernel?
-            .apply(extent: alphaMask.extent, arguments: [alphaMask]) ?? alphaMask
-        let glow = edgeMask
-            .clampedToExtent()
-            .applyingFilter("CIGaussianBlur", parameters: ["inputRadius": 2.0])
-            .cropped(to: mask.extent)
-            .applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1.6),
-                "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: -0.05)
-            ])
-        let tinted = glow.applyingFilter(
-            "CIFalseColor",
-            parameters: [
-                "inputColor0": CIColor(red: 0, green: 0, blue: 0, alpha: 0),
-                "inputColor1": CIColor(red: 0, green: 1, blue: 1, alpha: 0.9)
-            ]
-        )
-        return ciContext.createCGImage(tinted, from: mask.extent)
     }
 }
 #endif

@@ -61,7 +61,9 @@ public actor SegmentationService {
     private let logger: Logger
 
 #if canImport(CoreML)
-    private let modelConfiguration: MLModelConfiguration
+    private let encoderConfiguration: MLModelConfiguration
+    private let promptConfiguration: MLModelConfiguration
+    private let decoderConfiguration: MLModelConfiguration
     private struct ImageFeatures {
         let imageEmbedding: MLMultiArray
         let featsS0: MLMultiArray
@@ -90,9 +92,17 @@ public actor SegmentationService {
     public init(logger: Logger = .shared) {
         self.logger = logger
 #if canImport(CoreML)
-        let configuration = MLModelConfiguration()
-        configuration.computeUnits = .cpuOnly
-        self.modelConfiguration = configuration
+        let encoderConfiguration = MLModelConfiguration()
+        encoderConfiguration.computeUnits = .all
+        self.encoderConfiguration = encoderConfiguration
+
+        let promptConfiguration = MLModelConfiguration()
+        promptConfiguration.computeUnits = .cpuOnly
+        self.promptConfiguration = promptConfiguration
+
+        let decoderConfiguration = MLModelConfiguration()
+        decoderConfiguration.computeUnits = .all
+        self.decoderConfiguration = decoderConfiguration
 #endif
     }
 
@@ -112,15 +122,27 @@ public actor SegmentationService {
             let bundle = Bundle.module
 
             await logger.log("SegmentationService.prepare: loading encoder...", level: .debug, category: "SegmentationKit.SAM")
-            let encoderModel = try loadModel(named: "SAM2_1SmallImageEncoderFLOAT16", in: bundle)
+            let encoderModel = try loadModel(
+                named: "SAM2_1SmallImageEncoderFLOAT16",
+                in: bundle,
+                configuration: encoderConfiguration
+            )
             await logger.log("SegmentationService.prepare: encoder loaded", level: .debug, category: "SegmentationKit.SAM")
 
             await logger.log("SegmentationService.prepare: loading promptEncoder...", level: .debug, category: "SegmentationKit.SAM")
-            let promptModel = try loadModel(named: "SAM2_1SmallPromptEncoderFLOAT16", in: bundle)
+            let promptModel = try loadModel(
+                named: "SAM2_1SmallPromptEncoderFLOAT16",
+                in: bundle,
+                configuration: promptConfiguration
+            )
             await logger.log("SegmentationService.prepare: promptEncoder loaded", level: .debug, category: "SegmentationKit.SAM")
 
             await logger.log("SegmentationService.prepare: loading decoder...", level: .debug, category: "SegmentationKit.SAM")
-            let decoderModel = try loadModel(named: "SAM2_1SmallMaskDecoderFLOAT16", in: bundle)
+            let decoderModel = try loadModel(
+                named: "SAM2_1SmallMaskDecoderFLOAT16",
+                in: bundle,
+                configuration: decoderConfiguration
+            )
             await logger.log("SegmentationService.prepare: decoder loaded", level: .debug, category: "SegmentationKit.SAM")
 
             self.encoder = encoderModel
@@ -223,12 +245,16 @@ public actor SegmentationService {
     // MARK: - Encoder/Decoder
 
     #if canImport(CoreML)
-    private func loadModel(named resource: String, in bundle: Bundle) throws -> MLModel {
+    private func loadModel(
+        named resource: String,
+        in bundle: Bundle,
+        configuration: MLModelConfiguration
+    ) throws -> MLModel {
         // Note: loadModel is called from async context, so we can't await here
         // Logging happens in the caller (prepare method)
 
         if let compiledURL = bundle.url(forResource: resource, withExtension: "mlmodelc") {
-            return try MLModel(contentsOf: compiledURL, configuration: modelConfiguration)
+            return try MLModel(contentsOf: compiledURL, configuration: configuration)
         }
 
         guard let packageURL = bundle.url(forResource: resource, withExtension: "mlpackage") else {
@@ -236,7 +262,7 @@ public actor SegmentationService {
         }
 
         let compiled = try MLModel.compileModel(at: packageURL)
-        return try MLModel(contentsOf: compiled, configuration: modelConfiguration)
+        return try MLModel(contentsOf: compiled, configuration: configuration)
     }
 
     private func runEncoder(_ pixelBuffer: CVPixelBuffer, encoder: MLModel) throws -> ImageFeatures {
