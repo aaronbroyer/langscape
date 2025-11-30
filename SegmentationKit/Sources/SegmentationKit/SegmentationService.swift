@@ -20,6 +20,8 @@ public struct SegmentationRequest: Sendable {
     }
 }
 
+extension SegmentationRequest: @unchecked Sendable {}
+
 @available(macOS 15.0, iOS 17.0, *)
 public actor SegmentationService {
     public static let shared = SegmentationService()
@@ -176,7 +178,11 @@ public actor SegmentationService {
         guard let outline = edges.outputImage else { return upscale }
         
         let color = CIImage(color: CIColor(red: 0, green: 1, blue: 1, alpha: 1.0))
-        let coloredOutline = color.compositingOverImage(outline, operation: .sourceIn)
+            .cropped(to: outline.extent)
+        let coloredOutline = color.applyingFilter(
+            "CIMultiplyCompositing",
+            parameters: [kCIInputBackgroundImageKey: outline]
+        )
         
         let cropRect = CGRect(
             x: prompt.minX * 1024,
