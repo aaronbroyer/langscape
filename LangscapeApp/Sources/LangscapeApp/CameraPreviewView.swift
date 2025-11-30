@@ -26,6 +26,9 @@ struct CameraPreviewView: View {
     @State private var showCompletionFlash = false
     @State private var homeCardPressed = false
     @State private var startPulse = false
+#if canImport(CoreImage)
+    private static let maskCache = DetectionOverlayMaskCache()
+#endif
 
     var body: some View {
         GeometryReader { proxy in
@@ -394,10 +397,38 @@ struct CameraPreviewView: View {
     }
 
     private func detectionOverlay(for detections: [Detection], in size: CGSize) -> some View {
-        print("CameraPreviewView.detectionOverlay: Rendering \(detections.count) detections (overlay disabled)")
+#if canImport(CoreImage)
+        guard shouldShowMaskOverlay(for: gameViewModel.phase), let cameraFrame = cameraFrameRect(in: size) else {
+            return Color.clear
+                .frame(width: size.width, height: size.height)
+                .allowsHitTesting(false)
+        }
+        let maskIDs = Set(viewModel.segmentationMasks.keys)
+        Self.maskCache.prune(keeping: maskIDs)
+        let masks: [SegmentationMaskDrawable] = viewModel.segmentationMasks.compactMap { entry in
+            let (id, mask) = entry
+            guard let cgImage = Self.maskCache.image(for: id, mask: mask) else { return nil }
+            return SegmentationMaskDrawable(id: id, cgImage: cgImage)
+        }
+        return SegmentationOverlayLayer(
+            masks: masks,
+            cameraFrame: cameraFrame,
+            viewSize: size
+        )
+#else
         return Color.clear
             .frame(width: size.width, height: size.height)
             .allowsHitTesting(false)
+#endif
+    }
+
+    private func shouldShowMaskOverlay(for phase: LabelScrambleVM.Phase) -> Bool {
+        switch phase {
+        case .home:
+            return false
+        default:
+            return true
+        }
     }
 
     private func boundingRect(for detection: Detection, in viewSize: CGSize) -> CGRect {
@@ -435,6 +466,60 @@ struct CameraPreviewView: View {
         }
     }
 }
+
+#if canImport(CoreImage)
+private struct SegmentationMaskDrawable: Identifiable {
+    let id: UUID
+    let cgImage: CGImage
+}
+
+private struct SegmentationOverlayLayer: View {
+    let masks: [SegmentationMaskDrawable]
+    let cameraFrame: CGRect
+    let viewSize: CGSize
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(masks) { mask in
+                Image(decorative: mask.cgImage, scale: 1, orientation: .up)
+                    .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: cameraFrame.width, height: cameraFrame.height)
+                    .position(x: cameraFrame.midX, y: cameraFrame.midY)
+                    .blendMode(.plusLighter)
+                    .opacity(0.85)
+            }
+        }
+        .frame(width: viewSize.width, height: viewSize.height)
+        .allowsHitTesting(false)
+    }
+}
+
+private final class DetectionOverlayMaskCache {
+    private let context = CIContext()
+    private var cache: [UUID: CGImage] = [:]
+
+    func image(for id: UUID, mask: CIImage) -> CGImage? {
+        if let cached = cache[id] {
+            return cached
+        }
+        guard let cgImage = context.createCGImage(mask, from: mask.extent) else { return nil }
+        cache[id] = cgImage
+        return cgImage
+    }
+
+    func prune(keeping ids: Set<UUID>) {
+        guard !ids.isEmpty else {
+            cache.removeAll()
+            return
+        }
+        cache = cache.filter { ids.contains($0.key) }
+    }
+}
+#endif
+
 private struct RoundPlayLayer: View {
     let round: Round
     let placedLabels: Set<GameKitLS.Label.ID>

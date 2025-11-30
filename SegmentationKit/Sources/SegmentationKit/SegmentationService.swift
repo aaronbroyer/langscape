@@ -91,7 +91,7 @@ public actor SegmentationService {
         self.logger = logger
 #if canImport(CoreML)
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .cpuAndGPU
+        configuration.computeUnits = .cpuOnly
         self.modelConfiguration = configuration
 #endif
     }
