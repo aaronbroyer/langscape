@@ -6,7 +6,7 @@ import CoreImage.CIFilterBuiltins
 import CoreVideo
 import CoreGraphics
 
-public struct SegmentationRequest: Sendable {
+public struct SegmentationRequest {
     public let pixelBuffer: CVPixelBuffer
     public let prompt: CGRect // Normalized 0-1
     public let timestamp: TimeInterval
@@ -19,8 +19,6 @@ public struct SegmentationRequest: Sendable {
         self.imageSize = imageSize
     }
 }
-
-extension SegmentationRequest: @unchecked Sendable {}
 
 @available(macOS 15.0, iOS 17.0, *)
 public actor SegmentationService {
