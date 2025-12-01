@@ -726,7 +726,7 @@ private actor DetectionProcessor {
     // Tracking parameters (AGGRESSIVE: emit almost everything immediately)
     private let iouThreshold: Double = 0.30  // Very loose for crowded scenes
     private let maxTrackAge: TimeInterval = 1.0  // Keep tracks longer
-    private let smoothingAlpha: Double = 0.1  // Minimal smoothing - show detections fast
+    private let smoothingAlpha: Double = 0.5  // Moderate smoothing - balance stability with responsiveness
     private let maxActiveTracks: Int = 10000  // Very high cap
 
     // Confidence-based hit requirements (AGGRESSIVE: emit immediately)
@@ -790,16 +790,27 @@ private actor DetectionProcessor {
             // Query spatial index for nearby tracks (much faster than checking all tracks)
             let nearbyIDs = spatialIndex.query(bbox: det.boundingBox)
 
-            // Find best matching track among nearby candidates
+            // Find best matching track among nearby candidates with label-aware matching
             var bestID: UUID?
             var bestIoU: Double = 0
+            let detLabel = det.label.lowercased()
+
             for id in nearbyIDs {
                 guard let tr = tracks[id] else { continue }
                 let iouVal = iou(tr.bbox, det.boundingBox)
-                if iouVal > bestIoU { bestIoU = iouVal; bestID = id }
+                let sameLabel = tr.label == detLabel
+
+                // Label-aware matching: lower threshold for same-label matches
+                let threshold = sameLabel ? 0.20 : iouThreshold
+
+                // Only consider this track if IoU meets the threshold
+                if iouVal >= threshold && iouVal > bestIoU {
+                    bestIoU = iouVal
+                    bestID = id
+                }
             }
 
-            if let id = bestID, bestIoU >= iouThreshold, var tr = tracks[id] {
+            if let id = bestID, var tr = tracks[id] {
                 // EMA update for bbox and confidence
                 tr.bbox = emaBBox(old: tr.bbox, new: det.boundingBox, alpha: smoothingAlpha)
                 tr.confidence = tr.confidence * (1 - smoothingAlpha) + det.confidence * smoothingAlpha
