@@ -425,24 +425,29 @@ struct CameraPreviewView: View {
             return AnyView(Color.clear.frame(width: size.width, height: size.height).allowsHitTesting(false))
         }
 
-        let pendingIDs = Set(pendingObjects.map(\.id))
-        let maskIDs = Set(viewModel.segmentationMasks.keys.filter { pendingIDs.contains($0) })
-        print("🎯 Total segmentation masks: \(viewModel.segmentationMasks.count), Pending IDs: \(pendingIDs.count), Matching masks: \(maskIDs.count)")
-        Self.maskCache.prune(keeping: maskIDs)
+        print("🎯 Total segmentation masks: \(viewModel.segmentationMasks.count), Pending IDs: \(pendingObjects.count)")
+        var matchedMaskIDs = Set<UUID>()
 
         let masks: [SegmentationMaskDrawable] = pendingObjects.compactMap { object in
-            guard let maskResult = viewModel.segmentationMasks[object.id] else {
+            guard let (maskID, maskResult) = matchedMask(for: object) else {
                 print("⚠️ No mask result for object \(object.id)")
                 return nil
             }
-            print("✅ Found mask result for object \(object.id), extent: \(maskResult.image.extent)")
-            guard let cgImage = Self.maskCache.image(for: object.id, mask: maskResult.image) else {
+            matchedMaskIDs.insert(maskID)
+            if maskID == object.id {
+                print("✅ Found mask result for object \(object.id), extent: \(maskResult.image.extent)")
+            } else {
+                print("✅ Reusing mask \(maskID) for object \(object.id) (extent: \(maskResult.image.extent))")
+            }
+            guard let cgImage = Self.maskCache.image(for: maskID, mask: maskResult.image) else {
                 print("❌ Failed to create CGImage from mask for object \(object.id)")
                 return nil
             }
             print("✅ Created CGImage for object \(object.id)")
+            let viewBounds = CGRect(origin: .zero, size: size)
             let frame = boundingRect(forNormalizedRect: maskResult.boundingBox, in: size)
                 .intersection(cameraFrame)
+                .intersection(viewBounds)
             guard frame.width > 1, frame.height > 1 else {
                 print("⚠️ Frame too small for object \(object.id): \(frame)")
                 return nil
@@ -450,6 +455,7 @@ struct CameraPreviewView: View {
             print("✅ Rendering mask for object \(object.id) at frame: \(frame)")
             return SegmentationMaskDrawable(id: object.id, cgImage: cgImage, frame: frame)
         }
+        Self.maskCache.prune(keeping: matchedMaskIDs)
         guard !masks.isEmpty else {
             return AnyView(Color.clear.frame(width: size.width, height: size.height).allowsHitTesting(false))
         }
@@ -481,6 +487,27 @@ struct CameraPreviewView: View {
     private func pendingRoundObjects(round: Round, placedLabels: Set<GameKitLS.Label.ID>) -> [DetectedObject] {
         let satisfiedIDs = Set(placedLabels.compactMap { round.target(for: $0) })
         return round.objects.filter { !satisfiedIDs.contains($0.id) }
+    }
+
+    private func matchedMask(for object: DetectedObject) -> (UUID, SegmentationMaskResult)? {
+    #if canImport(CoreImage)
+        if let direct = viewModel.segmentationMasks[object.id] {
+            return (object.id, direct)
+        }
+        let best = viewModel.segmentationMasks.compactMap { entry -> (UUID, SegmentationMaskResult, CGFloat)? in
+            let (maskID, maskResult) = entry
+            let score = normalizedIoU(object.boundingBox, maskResult.boundingBox)
+            guard score >= 0.45 else { return nil }
+            return (maskID, maskResult, score)
+        }
+        .max(by: { $0.2 < $1.2 })
+
+        if let best {
+            print("ℹ️ Fallback mask reuse: using mask \(best.0) for object \(object.id) (IoU \(best.2))")
+            return (best.0, best.1)
+        }
+    #endif
+        return nil
     }
 
     private func boundingRect(for detection: Detection, in viewSize: CGSize) -> CGRect {
@@ -540,28 +567,22 @@ private struct SegmentationOverlayLayer: View {
         .allowsHitTesting(false)
     }
 
-    /// Creates a tinted, feathered mask so that we highlight only the segmented pixels instead of blasting solid white blobs.
     private func glowingMask(for mask: SegmentationMaskDrawable) -> some View {
         let baseMask = maskImage(for: mask)
-        let glowGradient = LinearGradient(
-            colors: [
-                Color.white.opacity(0.95),
-                ColorPalette.accent.swiftUIColor.opacity(0.9)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-
-        return glowGradient
-            .blendMode(.screen)
-            .mask(baseMask)
+        return baseMask
+            .colorMultiply(Color.cyan.opacity(0.75))
             .overlay(
-                Color.white
-                    .opacity(0.55)
-                    .blur(radius: 14)
-                    .mask(baseMask)
-                    .blendMode(.screen)
+                baseMask
+                    .colorMultiply(Color.white.opacity(0.9))
+                    .blur(radius: 12)
             )
+            .overlay(
+                baseMask
+                    .colorMultiply(Color.white)
+                    .blur(radius: 2)
+                    .opacity(0.8)
+            )
+            .compositingGroup()
     }
 
     private func maskImage(for mask: SegmentationMaskDrawable) -> some View {
@@ -834,6 +855,27 @@ private extension DetectionRect {
         let y = CGFloat(origin.y) * size.height
         return CGRect(x: x, y: y, width: width, height: height)
     }
+}
+
+private func normalizedIoU(_ a: DetectionRect, _ b: DetectionRect) -> CGFloat {
+    let ax1 = CGFloat(a.origin.x)
+    let ay1 = CGFloat(a.origin.y)
+    let ax2 = ax1 + CGFloat(a.size.width)
+    let ay2 = ay1 + CGFloat(a.size.height)
+
+    let bx1 = CGFloat(b.origin.x)
+    let by1 = CGFloat(b.origin.y)
+    let bx2 = bx1 + CGFloat(b.size.width)
+    let by2 = by1 + CGFloat(b.size.height)
+
+    let ix = max(0, min(ax2, bx2) - max(ax1, bx1))
+    let iy = max(0, min(ay2, by2) - max(ay1, by1))
+    let inter = ix * iy
+    guard inter > 0 else { return 0 }
+    let areaA = max(ax2 - ax1, 0) * max(ay2 - ay1, 0)
+    let areaB = max(bx2 - bx1, 0) * max(by2 - by1, 0)
+    let union = max(areaA + areaB - inter, .leastNonzeroMagnitude)
+    return inter / union
 }
 
 private struct ARCameraView: UIViewRepresentable {

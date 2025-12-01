@@ -81,8 +81,8 @@ public final class DetectionVM: ObservableObject {
     private let segmentationServiceBox: AnyObject?
     private var pendingSegmentationDetections: Set<UUID> = []
     private var userRequestedSegmentationIDs: Set<UUID> = []
-    private let segmentationConfidenceGate: Double = 0.85
-    private let segmentationAreaGate: Double = 0.35
+    private let segmentationConfidenceGate: Double = 0.55
+    private let segmentationAreaGate: Double = 0.60
     private var automaticSegmentationEnabled = false
     private var segmentationFailureCount = 0
     private var segmentationSuspendUntil: Date?
