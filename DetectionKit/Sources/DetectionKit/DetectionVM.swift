@@ -94,6 +94,7 @@ public final class DetectionVM: ObservableObject {
     private var maskMetadata: [UUID: SegmentationMaskMetadata] = [:]
     private let maskRefreshIoUThreshold: Double = 0.75
     private let maskRefreshInterval: TimeInterval = 1.5
+    private var inFlightSegmentationTasks: [UUID: Task<Void, Never>] = [:]
 #endif
     private let activeInFlightLimit = 2
     private let suspendedInFlightLimit = 0
@@ -494,6 +495,10 @@ public final class DetectionVM: ObservableObject {
         timestamp: Date,
         service: SegmentationService
     ) {
+        guard isAppActive else {
+            Task { await logger.log("⚠️ Skipping segmentation for \(detection.label) - app is inactive", level: .debug, category: "DetectionKit.DetectionVM") }
+            return
+        }
         let clampedBoundingBox = clampNormalizedRect(detection.boundingBox)
         let prompt = promptRect(for: clampedBoundingBox, pixelBuffer: pixelBuffer)
         let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
@@ -509,7 +514,7 @@ public final class DetectionVM: ObservableObject {
         maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: clampedBoundingBox, lastRequest: timestamp)
         pendingSegmentationDetections.insert(detectionID)
 
-        Task(priority: .userInitiated) { [weak self] in
+        let task = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
                 await self.logger.log("🔵 Segmentation starting for \(detection.label) (\(reason)) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
@@ -522,17 +527,24 @@ public final class DetectionVM: ObservableObject {
                     self.segmentationFailureCount = 0
                     self.segmentationSuspendUntil = nil
                     self.maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: maskBoundingBox, lastRequest: timestamp)
+                    self.inFlightSegmentationTasks.removeValue(forKey: detectionID)
                 }
                 await self.logger.log("✅ Segmentation mask ready for \(detection.label) [\(detectionID)]", level: .info, category: "DetectionKit.DetectionVM")
             } catch {
                 await MainActor.run {
                     self.pendingSegmentationDetections.remove(detectionID)
+                    self.inFlightSegmentationTasks.removeValue(forKey: detectionID)
                 }
-                await self.logger.log("❌ Segmentation FAILED for \(detection.label) [\(detectionID)]: \(error.localizedDescription)", level: .error, category: "DetectionKit.DetectionVM")
-                await self.logger.log("Segmentation error details: \(String(describing: error))", level: .debug, category: "DetectionKit.DetectionVM")
-                await self.handleSegmentationFailure(error, label: detection.label)
+                if error is CancellationError {
+                    await self.logger.log("⚠️ Segmentation cancelled for \(detection.label) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
+                } else {
+                    await self.logger.log("❌ Segmentation FAILED for \(detection.label) [\(detectionID)]: \(error.localizedDescription)", level: .error, category: "DetectionKit.DetectionVM")
+                    await self.logger.log("Segmentation error details: \(String(describing: error))", level: .debug, category: "DetectionKit.DetectionVM")
+                    await self.handleSegmentationFailure(error, label: detection.label)
+                }
             }
         }
+        inFlightSegmentationTasks[detectionID] = task
     }
 #endif
 
@@ -600,6 +612,16 @@ public final class DetectionVM: ObservableObject {
     }
 
     private func resetSegmentationStateForSuspend() {
+        // Cancel all in-flight segmentation tasks to prevent GPU work in background
+        let taskCount = inFlightSegmentationTasks.count
+        if taskCount > 0 {
+            Task { await logger.log("🛑 Cancelling \(taskCount) in-flight segmentation task(s) due to app suspend", level: .info, category: "DetectionKit.DetectionVM") }
+        }
+        for task in inFlightSegmentationTasks.values {
+            task.cancel()
+        }
+        inFlightSegmentationTasks.removeAll()
+
         pendingSegmentationDetections.removeAll()
         userRequestedSegmentationIDs.removeAll()
         maskMetadata.removeAll()

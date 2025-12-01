@@ -62,7 +62,7 @@ public actor SegmentationService {
         self.promptEncoder = try loadModel("SAM2_1SmallPromptEncoderFLOAT16", bundle, promptConfig)
         self.decoder = try loadModel("SAM2_1SmallMaskDecoderFLOAT16", bundle, decoderConfig)
         
-        await logger.log("✅ SAM 2.1 Models Loaded (Padding + CPU Fix Applied)", level: .info, category: "Segmentation")
+        await logger.log("✅ SAM 2.0 Models Loaded (Fixed: replaced buggy 2.1 models)", level: .info, category: "Segmentation")
     }
 
     public func segment(_ request: SegmentationRequest) async throws -> CIImage {
@@ -103,6 +103,10 @@ public actor SegmentationService {
         self.cachedEmbedding = output.featureValue(for: "image_embedding")?.multiArrayValue
         self.cachedFeatsS0 = output.featureValue(for: "feats_s0")?.multiArrayValue
         self.cachedFeatsS1 = output.featureValue(for: "feats_s1")?.multiArrayValue
+
+        if let emb = cachedEmbedding {
+            print("🎨 Image Encoder Output: embedding shape=\(emb.shape)")
+        }
     }
     
     private func makePrompts(from rawBox: CGRect) throws -> (MLMultiArray, MLMultiArray) {
@@ -112,24 +116,26 @@ public actor SegmentationService {
         let x2 = Float(box.maxX * targetSize.width)
         let y2 = Float(box.maxY * targetSize.height)
 
+        print("📦 SAM Prompt Box: normalized=\(box), pixel coords=[(\(x1),\(y1)) to (\(x2),\(y2))]")
+
         let count = 5
         let points = try MLMultiArray(shape: [1, NSNumber(value: count), 2], dataType: .float32)
         let labels = try MLMultiArray(shape: [1, NSNumber(value: count)], dataType: .float32)
-        
+
         for i in 0..<count {
             labels[[0, NSNumber(value: i)]] = NSNumber(value: Float(-1))
             points[[0, NSNumber(value: i), 0]] = NSNumber(value: Float(0))
             points[[0, NSNumber(value: i), 1]] = NSNumber(value: Float(0))
         }
-        
+
         points[[0, 0, 0]] = NSNumber(value: x1)
         points[[0, 0, 1]] = NSNumber(value: y1)
         labels[[0, 0]] = NSNumber(value: Float(2))
-        
+
         points[[0, 1, 0]] = NSNumber(value: x2)
         points[[0, 1, 1]] = NSNumber(value: y2)
         labels[[0, 1]] = NSNumber(value: Float(3))
-        
+
         return (points, labels)
     }
 
@@ -158,56 +164,38 @@ public actor SegmentationService {
     }
     
     private func processMask(logits: MLMultiArray, prompt rawPrompt: CGRect) throws -> CIImage {
+        // Convert SAM logits to binary mask image (white = object, black = background)
         let mask256 = try logitsToImage(logits: logits)
         let upscale = mask256.transformed(by: CGAffineTransform(scaleX: 4.0, y: 4.0))
 
-        let threshold = CIFilter.colorThreshold()
-        threshold.inputImage = upscale
-        threshold.threshold = 0.0
+        // Extract edges using morphology gradient (creates object-shaped outline)
+        let edges = upscale.applyingFilter("CIMorphologyGradient", parameters: [
+            "inputRadius": 4.0  // Outline thickness
+        ])
 
-        let gradient = CIFilter.morphologyGradient()
-        gradient.inputImage = threshold.outputImage
-        gradient.radius = 2.5
+        // Dilate edges to make them more prominent
+        let thickEdges = edges.applyingFilter("CIMorphologyMaximum", parameters: [
+            "inputRadius": 2.0
+        ])
 
-        guard let outline = gradient.outputImage else { return upscale }
+        // Add gaussian blur for glow effect
+        let glowingEdges = thickEdges.applyingFilter("CIGaussianBlur", parameters: [
+            "inputRadius": 6.0  // Glow radius
+        ])
 
-        let contrast = outline.applyingFilter(
-            "CIColorControls",
-            parameters: [kCIInputContrastKey: 1.8, kCIInputBrightnessKey: 0.1, kCIInputSaturationKey: 0.0]
-        )
-
-        let alphaMask = contrast.applyingFilter(
+        // Convert white edges to cyan with transparency
+        let colored = glowingEdges.applyingFilter(
             "CIColorMatrix",
             parameters: [
-                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputAVector": CIVector(x: 0.3333, y: 0.3333, z: 0.3333, w: 0),
+                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),      // R = 0 (no red for cyan)
+                "inputGVector": CIVector(x: 1, y: 0, z: 0, w: 0),      // G = grayscale input
+                "inputBVector": CIVector(x: 1, y: 0, z: 0, w: 0),      // B = grayscale input
+                "inputAVector": CIVector(x: 2.0, y: 0, z: 0, w: 0),    // A = 2x brightness for visibility
                 "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
             ]
         )
 
-        let glow = alphaMask
-            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 4.0])
-            .cropped(to: outline.extent)
-
-        let combined = alphaMask.applyingFilter(
-            "CISourceOverCompositing",
-            parameters: [kCIInputBackgroundImageKey: glow]
-        )
-
-        let neon = CIImage(color: CIColor(red: 0, green: 1, blue: 1, alpha: 1))
-            .cropped(to: combined.extent)
-        let transparent = CIImage(color: .clear).cropped(to: combined.extent)
-
-        let colored = neon.applyingFilter(
-            "CIBlendWithAlphaMask",
-            parameters: [
-                kCIInputBackgroundImageKey: transparent,
-                kCIInputMaskImageKey: combined
-            ]
-        )
-
+        // Crop to bounding box
         let prompt = clampNormalizedRect(rawPrompt)
         let cropRect = CGRect(
             x: prompt.minX * targetSize.width,
@@ -233,11 +221,26 @@ public actor SegmentationService {
         let ptr = UnsafePointer<Float>(OpaquePointer(logits.dataPointer))
         let count = 256 * 256
         var pixels = [UInt8](repeating: 0, count: count)
-        
+
+        var positiveCount = 0
+        var maxLogit: Float = -999
+        var minLogit: Float = 999
+
         for i in 0..<count {
-            if ptr[i] > 0.0 { pixels[i] = 255 }
+            let logit = ptr[i]
+            maxLogit = max(maxLogit, logit)
+            minLogit = min(minLogit, logit)
+
+            // SAM logits: 0 is the decision boundary (positive = object, negative = background)
+            // With fixed SAM 2.0 models, we can use the proper threshold
+            if logit > 0.0 {
+                pixels[i] = 255
+                positiveCount += 1
+            }
         }
-        
+
+        print("🎭 SAM logits - positive pixels: \(positiveCount)/\(count), range: [\(minLogit), \(maxLogit)]")
+
         let data = Data(pixels)
         return CIImage(bitmapData: data, bytesPerRow: 256, size: CGSize(width: 256, height: 256), format: .L8, colorSpace: nil)
     }

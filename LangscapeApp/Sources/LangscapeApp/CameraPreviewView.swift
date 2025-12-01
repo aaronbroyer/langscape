@@ -439,17 +439,35 @@ struct CameraPreviewView: View {
             } else {
                 print("✅ Reusing mask \(maskID) for object \(object.id) (extent: \(maskResult.image.extent))")
             }
+            print("🔍 Mask CIImage extent for \(object.id): \(maskResult.image.extent)")
             guard let cgImage = Self.maskCache.image(for: maskID, mask: maskResult.image) else {
                 print("❌ Failed to create CGImage from mask for object \(object.id)")
                 return nil
             }
-            print("✅ Created CGImage for object \(object.id)")
+            print("✅ Created CGImage for \(object.id): size=\(cgImage.width)x\(cgImage.height)")
             let viewBounds = CGRect(origin: .zero, size: size)
-            let frame = boundingRect(forNormalizedRect: maskResult.boundingBox, in: size)
-                .intersection(cameraFrame)
-                .intersection(viewBounds)
-            guard frame.width > 1, frame.height > 1 else {
-                print("⚠️ Frame too small for object \(object.id): \(frame)")
+            print("🔍 BoundingBox for \(object.id): origin=(\(maskResult.boundingBox.origin.x), \(maskResult.boundingBox.origin.y)) size=(\(maskResult.boundingBox.size.width)x\(maskResult.boundingBox.size.height))")
+            let projectedFrame = boundingRect(forNormalizedRect: maskResult.boundingBox, in: size)
+            print("🔍 Projected frame for \(object.id): \(projectedFrame)")
+            print("🔍 Camera frame: \(cameraFrame)")
+
+            // Intersect with camera frame, checking for valid intersection
+            guard projectedFrame.intersects(cameraFrame) else {
+                print("⚠️ Projected frame doesn't intersect camera frame for object \(object.id)")
+                return nil
+            }
+            var frame = projectedFrame.intersection(cameraFrame)
+
+            // Intersect with view bounds, checking for valid intersection
+            guard frame.intersects(viewBounds) else {
+                print("⚠️ Frame doesn't intersect view bounds for object \(object.id)")
+                return nil
+            }
+            frame = frame.intersection(viewBounds)
+
+            print("🔍 Final frame after intersections for \(object.id): \(frame)")
+            guard frame.width > 1, frame.height > 1, !frame.isNull, !frame.isInfinite else {
+                print("⚠️ Frame invalid or too small for object \(object.id): \(frame)")
                 return nil
             }
             print("✅ Rendering mask for object \(object.id) at frame: \(frame)")
@@ -568,29 +586,12 @@ private struct SegmentationOverlayLayer: View {
     }
 
     private func glowingMask(for mask: SegmentationMaskDrawable) -> some View {
-        let baseMask = maskImage(for: mask)
-        return baseMask
-            .colorMultiply(Color.cyan.opacity(0.75))
-            .overlay(
-                baseMask
-                    .colorMultiply(Color.white.opacity(0.9))
-                    .blur(radius: 12)
-            )
-            .overlay(
-                baseMask
-                    .colorMultiply(Color.white)
-                    .blur(radius: 2)
-                    .opacity(0.8)
-            )
-            .compositingGroup()
-    }
+        // Render the actual SAM-generated mask with object-shaped outline
+        let uiImage = UIImage(cgImage: mask.cgImage)
 
-    private func maskImage(for mask: SegmentationMaskDrawable) -> some View {
-        Image(decorative: mask.cgImage, scale: 1, orientation: .up)
+        return Image(uiImage: uiImage)
             .resizable()
             .interpolation(.high)
-            .antialiased(true)
-            .aspectRatio(contentMode: .fill)
             .frame(width: mask.frame.width, height: mask.frame.height)
             .position(x: mask.frame.midX, y: mask.frame.midY)
     }
