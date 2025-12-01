@@ -14,7 +14,7 @@ struct OnboardingFlowView: View {
             switch viewModel.step {
             case .splash:
                 VStack(spacing: 28) {
-                    LangscapeLogo(style: .full, glyphSize: 68, brand: .context)
+                    LangscapeLogo(style: .full, glyphSize: 68)
                     CTAButton("Get Started") {
                         viewModel.advanceFromSplash()
                     }
@@ -26,7 +26,7 @@ struct OnboardingFlowView: View {
                         Spacer(minLength: 0)
 
                         VStack(spacing: Spacing.medium.cgFloat) {
-                            LangscapeLogo(style: .mark, glyphSize: 72, brand: .context)
+                            LangscapeLogo(style: .mark, glyphSize: 72)
                                 .shadow(color: Color.black.opacity(0.18), radius: 10, x: 0, y: 6)
 
                             Text("Language, layered on life")
@@ -56,7 +56,7 @@ struct OnboardingFlowView: View {
                 .padding()
             case .cameraPermission:
                 VStack(spacing: 22) {
-                    LangscapeLogo(style: .mark, glyphSize: 56, brand: .context)
+                    LangscapeLogo(style: .mark, glyphSize: 56)
                     Text("Camera Access")
                         .font(.title2)
                     Text("We use the camera to detect objects for activities.")

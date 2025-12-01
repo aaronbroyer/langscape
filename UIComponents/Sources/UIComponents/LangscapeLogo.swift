@@ -1,199 +1,192 @@
 import SwiftUI
-import DesignSystem
-#if canImport(UIKit)
-import UIKit
-#endif
-#if canImport(AppKit)
-import AppKit
-#endif
 
 public struct LangscapeLogo: View {
     public enum Style { case full, mark }
-    public enum Brand { case chatPin, speechPin, context, topoPin, monogram }
 
     private let style: Style
     private let glyphSize: CGFloat
     private let spacing: CGFloat
-    private let tint: Color
-    private let accentTint: Color
-    private let assetName: String?
 
-    public init(style: Style = .full,
-                glyphSize: CGFloat = 56,
-                spacing: CGFloat = 12,
-                tint: Color = ColorPalette.primary.swiftUIColor,
-                accentTint: Color = ColorPalette.accent.swiftUIColor,
-                assetName: String? = "LangscapeBrandmark",
-                brand: Brand = .chatPin) {
+    public init(
+        style: Style = .full,
+        glyphSize: CGFloat = 70,
+        spacing: CGFloat = 15
+    ) {
         self.style = style
         self.glyphSize = glyphSize
         self.spacing = spacing
-        self.tint = tint
-        self.assetName = assetName
-        self.accentTint = accentTint
-        _ = brand
     }
 
     public var body: some View {
-        if let asset = assetImage {
-            asset
-                .renderingMode(.original)
-                .resizable()
-                .interpolation(.high)
-                .antialiased(true)
-                .scaledToFit()
-                .frame(height: glyphSize)
-                .accessibilityLabel("Langscape")
-        } else {
-            legacyBody
-        }
+        let content = LogoContent(style: style, glyphSize: glyphSize, spacing: spacing)
+        content
+            .overlay(
+                gradient
+                    .mask(content)
+            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Langscape")
     }
 
-    private var legacyBody: some View {
-        HStack(spacing: style == .full ? spacing : 0) {
-            glyph
-            if style == .full { wordmark }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Langscape")
-    }
-
-    @ViewBuilder
-    private var glyph: some View {
-        GradientCameraPinMark(size: glyphSize,
-                              strokeColor: tint,
-                              accentColor: accentTint)
-    }
-
-    private var wordmark: some View {
-        Text("LANGSCAPE")
-            .font(.system(size: glyphSize * 0.52, weight: .semibold, design: .rounded))
-            .kerning(0.6)
-            .foregroundStyle(tint)
-    }
-
-    private var assetImage: Image? {
-        guard let name = assetName else { return nil }
-        return LangscapeLogo.loadImage(named: name)
-    }
-
-    private static func loadImage(named name: String) -> Image? {
-        #if canImport(UIKit)
-        if let ui = UIImage(named: name, in: .main, compatibleWith: nil) {
-            return Image(uiImage: ui)
-        }
-        if let ui = UIImage(named: name, in: .module, compatibleWith: nil) {
-            return Image(uiImage: ui)
-        }
-        return nil
-        #elseif canImport(AppKit)
-        if let ns = NSImage(named: NSImage.Name(name)) {
-            return Image(nsImage: ns)
-        }
-        if let url = Bundle.main.url(forResource: name, withExtension: nil), let ns = NSImage(contentsOf: url) {
-            return Image(nsImage: ns)
-        }
-        if let url = Bundle.module.url(forResource: name, withExtension: nil), let ns = NSImage(contentsOf: url) {
-            return Image(nsImage: ns)
-        }
-        return nil
-        #else
-        return nil
-        #endif
+    private var gradient: LinearGradient {
+        LinearGradient(
+            gradient: Gradient(colors: [
+                Color(red: 107 / 255, green: 203 / 255, blue: 219 / 255),
+                Color(red: 142 / 255, green: 88 / 255, blue: 166 / 255)
+            ]),
+            startPoint: .leading,
+            endPoint: .trailing
+        )
     }
 }
 
-// MARK: - SVG Inspired Mark
+private struct LogoContent: View {
+    let style: LangscapeLogo.Style
+    let glyphSize: CGFloat
+    let spacing: CGFloat
 
-fileprivate struct GradientCameraPinMark: View {
-    let size: CGFloat
-    let strokeColor: Color
-    let accentColor: Color
-
-    private var strokeWidth: CGFloat { max(1.2, size * (5.0 / 200.0)) }
-    private var accentDiameter: CGFloat { size * (30.0 / 200.0) }
-    private var accentOffsetY: CGFloat { size * ((80.0 - 100.0) / 200.0) }
+    private var effectiveSpacing: CGFloat { style == .full ? spacing : 0 }
+    private var wordmarkSize: CGFloat { glyphSize * (52.0 / 70.0) }
 
     var body: some View {
-        ZStack {
-            SVGCameraBracketShape()
-                .stroke(strokeColor, style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round))
-            SVGLocationPinOutlineShape()
-                .stroke(strokeColor, style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round))
-            Circle()
-                .fill(accentColor)
-                .frame(width: accentDiameter, height: accentDiameter)
-                .offset(y: accentOffsetY)
+        HStack(spacing: effectiveSpacing) {
+            ExactLogoGlyph(size: glyphSize)
+            if style == .full {
+                Text("LANGSCAPE")
+                    .font(.system(size: wordmarkSize, weight: .heavy, design: .rounded))
+                    .kerning(glyphSize * 0.015)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                    .allowsTightening(true)
+            }
         }
-        .frame(width: size, height: size)
-        .drawingGroup()
+        .foregroundColor(.white)
+        .padding(.vertical, 0)
     }
 }
 
-fileprivate struct SVGCameraBracketShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let base: CGFloat = 200
-        let scale = min(rect.width, rect.height) / base
-        let offsetX = rect.midX - base * 0.5 * scale
-        let offsetY = rect.midY - base * 0.5 * scale
-        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: offsetX + x * scale, y: offsetY + y * scale)
+private struct ExactLogoGlyph: View {
+    let size: CGFloat
+
+    private let baseSize: CGFloat = 70
+    private var scale: CGFloat { size / baseSize }
+
+    var body: some View {
+        let stroke = StrokeStyle(lineWidth: 4 * scale, lineCap: .round, lineJoin: .round)
+
+        ZStack {
+            PreciseBracketShape()
+                .stroke(Color.white, style: stroke)
+                .frame(width: size, height: size)
+
+            PreciseMapPinShape()
+                .stroke(Color.white, style: stroke)
+                .frame(width: 32 * scale, height: 44 * scale)
+                .offset(y: 2 * scale)
+
+            Circle()
+                .stroke(Color.white, lineWidth: 4 * scale)
+                .frame(width: 12 * scale, height: 12 * scale)
+                .offset(y: -8 * scale)
         }
-        let radius = 10 * scale
+        .frame(width: size, height: size)
+    }
+}
 
-        // top-left
-        path.move(to: pt(60, 20))
-        path.addLine(to: pt(20, 20))
-        path.addArc(center: pt(20, 30), radius: radius, startAngle: .degrees(270), endAngle: .degrees(180), clockwise: true)
-        path.addLine(to: pt(10, 70))
+private struct PreciseBracketShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let base: CGFloat = 70
+        let scale = min(rect.width, rect.height) / base
 
-        // bottom-left
-        path.move(to: pt(10, 130))
-        path.addLine(to: pt(10, 170))
-        path.addArc(center: pt(20, 170), radius: radius, startAngle: .degrees(180), endAngle: .degrees(90), clockwise: true)
-        path.addLine(to: pt(60, 180))
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(
+                x: rect.minX + x * scale,
+                y: rect.minY + y * scale
+            )
+        }
 
-        // bottom-right
-        path.move(to: pt(140, 180))
-        path.addLine(to: pt(180, 180))
-        path.addArc(center: pt(180, 170), radius: radius, startAngle: .degrees(90), endAngle: .degrees(0), clockwise: true)
-        path.addLine(to: pt(190, 130))
+        var path = Path()
 
-        // top-right
-        path.move(to: pt(190, 70))
-        path.addLine(to: pt(190, 30))
-        path.addArc(center: pt(180, 30), radius: radius, startAngle: .degrees(0), endAngle: .degrees(270), clockwise: true)
-        path.addLine(to: pt(140, 20))
+        path.move(to: point(0, 20))
+        path.addLine(to: point(0, 10))
+        path.addArc(
+            center: point(10, 10),
+            radius: 10 * scale,
+            startAngle: .degrees(180),
+            endAngle: .degrees(270),
+            clockwise: false
+        )
+        path.addLine(to: point(25, 0))
+
+        path.move(to: point(45, 0))
+        path.addLine(to: point(60, 0))
+        path.addArc(
+            center: point(60, 10),
+            radius: 10 * scale,
+            startAngle: .degrees(270),
+            endAngle: .degrees(0),
+            clockwise: false
+        )
+        path.addLine(to: point(70, 20))
+
+        path.move(to: point(70, 50))
+        path.addLine(to: point(70, 60))
+        path.addArc(
+            center: point(60, 60),
+            radius: 10 * scale,
+            startAngle: .degrees(0),
+            endAngle: .degrees(90),
+            clockwise: false
+        )
+        path.addLine(to: point(45, 70))
+
+        path.move(to: point(25, 70))
+        path.addLine(to: point(10, 70))
+        path.addArc(
+            center: point(10, 60),
+            radius: 10 * scale,
+            startAngle: .degrees(90),
+            endAngle: .degrees(180),
+            clockwise: false
+        )
+        path.addLine(to: point(0, 50))
 
         return path
     }
 }
 
-fileprivate struct SVGLocationPinOutlineShape: Shape {
+private struct PreciseMapPinShape: Shape {
     func path(in rect: CGRect) -> Path {
-        func pt(_ x: CGFloat, _ y: CGFloat, base: CGFloat, scale: CGFloat, offsetX: CGFloat, offsetY: CGFloat) -> CGPoint {
-            CGPoint(x: offsetX + x * scale, y: offsetY + y * scale)
-        }
-        let base: CGFloat = 200
-        let scale = min(rect.width, rect.height) / base
-        let offsetX = rect.midX - base * 0.5 * scale
-        let offsetY = rect.midY - base * 0.5 * scale
-
         var path = Path()
-        path.move(to: pt(100, 40, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY))
-        path.addCurve(to: pt(62, 84, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY),
-                      control1: pt(80, 32, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY),
-                      control2: pt(65, 56, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY))
-        path.addCurve(to: pt(100, 150, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY),
-                      control1: pt(58, 115, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY),
-                      control2: pt(82, 146, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY))
-        path.addCurve(to: pt(138, 84, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY),
-                      control1: pt(118, 146, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY),
-                      control2: pt(142, 115, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY))
-        path.addCurve(to: pt(100, 40, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY),
-                      control1: pt(135, 56, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY),
-                      control2: pt(122, 32, base: base, scale: scale, offsetX: offsetX, offsetY: offsetY))
+
+        let width = rect.width
+        let height = rect.height
+        let headRadius = width / 2
+        let headCenterY = headRadius
+        let tip = CGPoint(x: width / 2, y: height)
+
+        path.move(to: tip)
+
+        path.addCurve(
+            to: CGPoint(x: 0, y: headCenterY),
+            control1: CGPoint(x: width * 0.05, y: height * 0.65),
+            control2: CGPoint(x: 0, y: headCenterY + headRadius * 0.5)
+        )
+
+        path.addArc(
+            center: CGPoint(x: width / 2, y: headCenterY),
+            radius: headRadius,
+            startAngle: .degrees(180),
+            endAngle: .degrees(0),
+            clockwise: false
+        )
+
+        path.addCurve(
+            to: tip,
+            control1: CGPoint(x: width, y: headCenterY + headRadius * 0.5),
+            control2: CGPoint(x: width * 0.95, y: height * 0.65)
+        )
+
         path.closeSubpath()
         return path
     }
