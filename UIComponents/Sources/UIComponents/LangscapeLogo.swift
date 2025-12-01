@@ -1,4 +1,5 @@
 import SwiftUI
+import DesignSystem
 
 public struct LangscapeLogo: View {
     public enum Style { case full, mark }
@@ -18,25 +19,15 @@ public struct LangscapeLogo: View {
     }
 
     public var body: some View {
-        let content = LogoContent(style: style, glyphSize: glyphSize, spacing: spacing)
-        content
-            .overlay(
-                gradient
-                    .mask(content)
-            )
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Langscape")
-    }
-
-    private var gradient: LinearGradient {
-        LinearGradient(
-            gradient: Gradient(colors: [
-                Color(red: 107 / 255, green: 203 / 255, blue: 219 / 255),
-                Color(red: 142 / 255, green: 88 / 255, blue: 166 / 255)
-            ]),
-            startPoint: .leading,
-            endPoint: .trailing
+        LogoContent(
+            style: style,
+            glyphSize: glyphSize,
+            spacing: spacing,
+            brandColor: ColorPalette.primary.swiftUIColor,
+            accentColor: ColorPalette.accent.swiftUIColor
         )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Langscape")
     }
 }
 
@@ -44,13 +35,19 @@ private struct LogoContent: View {
     let style: LangscapeLogo.Style
     let glyphSize: CGFloat
     let spacing: CGFloat
+    let brandColor: Color
+    let accentColor: Color
 
     private var effectiveSpacing: CGFloat { style == .full ? spacing : 0 }
     private var wordmarkSize: CGFloat { glyphSize * (52.0 / 70.0) }
 
     var body: some View {
         HStack(spacing: effectiveSpacing) {
-            ExactLogoGlyph(size: glyphSize)
+            ExactLogoGlyph(
+                size: glyphSize,
+                strokeColor: brandColor,
+                accentColor: accentColor
+            )
             if style == .full {
                 Text("LANGSCAPE")
                     .font(.system(size: wordmarkSize, weight: .heavy, design: .rounded))
@@ -58,15 +55,17 @@ private struct LogoContent: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
                     .allowsTightening(true)
+                    .foregroundStyle(brandColor)
             }
         }
-        .foregroundColor(.white)
         .padding(.vertical, 0)
     }
 }
 
 private struct ExactLogoGlyph: View {
     let size: CGFloat
+    let strokeColor: Color
+    let accentColor: Color
 
     private let baseSize: CGFloat = 70
     private var scale: CGFloat { size / baseSize }
@@ -76,16 +75,21 @@ private struct ExactLogoGlyph: View {
 
         ZStack {
             PreciseBracketShape()
-                .stroke(Color.white, style: stroke)
+                .stroke(strokeColor, style: stroke)
                 .frame(width: size, height: size)
 
             PreciseMapPinShape()
-                .stroke(Color.white, style: stroke)
+                .stroke(strokeColor, style: stroke)
                 .frame(width: 32 * scale, height: 44 * scale)
                 .offset(y: 2 * scale)
 
             Circle()
-                .stroke(Color.white, lineWidth: 4 * scale)
+                .fill(accentColor)
+                .frame(width: 12 * scale, height: 12 * scale)
+                .offset(y: -8 * scale)
+
+            Circle()
+                .stroke(strokeColor, lineWidth: 4 * scale)
                 .frame(width: 12 * scale, height: 12 * scale)
                 .offset(y: -8 * scale)
         }
