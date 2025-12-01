@@ -407,9 +407,11 @@ struct CameraPreviewView: View {
 
     private func maskOverlay(in size: CGSize) -> AnyView {
 #if canImport(CoreImage)
+        print("🎭 maskOverlay called for phase: \(gameViewModel.phase)")
         guard shouldShowMaskOverlay(for: gameViewModel.phase),
               let round = gameViewModel.round,
               let cameraFrame = cameraFrameRect(in: size) else {
+            print("⚠️ maskOverlay early return: shouldShow=\(shouldShowMaskOverlay(for: gameViewModel.phase)), hasRound=\(gameViewModel.round != nil), hasCameraFrame=\(cameraFrameRect(in: size) != nil)")
             return AnyView(
                 Color.clear
                     .frame(width: size.width, height: size.height)
@@ -417,20 +419,35 @@ struct CameraPreviewView: View {
             )
         }
         let pendingObjects = pendingRoundObjects(round: round, placedLabels: gameViewModel.placedLabels)
+        print("📊 Pending objects: \(pendingObjects.count)")
         guard !pendingObjects.isEmpty else {
+            print("⚠️ No pending objects, returning clear view")
             return AnyView(Color.clear.frame(width: size.width, height: size.height).allowsHitTesting(false))
         }
 
         let pendingIDs = Set(pendingObjects.map(\.id))
         let maskIDs = Set(viewModel.segmentationMasks.keys.filter { pendingIDs.contains($0) })
+        print("🎯 Total segmentation masks: \(viewModel.segmentationMasks.count), Pending IDs: \(pendingIDs.count), Matching masks: \(maskIDs.count)")
         Self.maskCache.prune(keeping: maskIDs)
 
         let masks: [SegmentationMaskDrawable] = pendingObjects.compactMap { object in
-            guard let maskResult = viewModel.segmentationMasks[object.id],
-                  let cgImage = Self.maskCache.image(for: object.id, mask: maskResult.image) else { return nil }
+            guard let maskResult = viewModel.segmentationMasks[object.id] else {
+                print("⚠️ No mask result for object \(object.id)")
+                return nil
+            }
+            print("✅ Found mask result for object \(object.id), extent: \(maskResult.image.extent)")
+            guard let cgImage = Self.maskCache.image(for: object.id, mask: maskResult.image) else {
+                print("❌ Failed to create CGImage from mask for object \(object.id)")
+                return nil
+            }
+            print("✅ Created CGImage for object \(object.id)")
             let frame = boundingRect(forNormalizedRect: maskResult.boundingBox, in: size)
                 .intersection(cameraFrame)
-            guard frame.width > 1, frame.height > 1 else { return nil }
+            guard frame.width > 1, frame.height > 1 else {
+                print("⚠️ Frame too small for object \(object.id): \(frame)")
+                return nil
+            }
+            print("✅ Rendering mask for object \(object.id) at frame: \(frame)")
             return SegmentationMaskDrawable(id: object.id, cgImage: cgImage, frame: frame)
         }
         guard !masks.isEmpty else {

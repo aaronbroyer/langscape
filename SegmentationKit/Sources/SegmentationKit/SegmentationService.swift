@@ -199,6 +199,18 @@ public actor SegmentationService {
             parameters: [kCIInputBackgroundImageKey: glow]
         )
 
+        let neon = CIImage(color: CIColor(red: 0, green: 1, blue: 1, alpha: 1))
+            .cropped(to: combined.extent)
+        let transparent = CIImage(color: .clear).cropped(to: combined.extent)
+
+        let colored = neon.applyingFilter(
+            "CIBlendWithAlphaMask",
+            parameters: [
+                kCIInputBackgroundImageKey: transparent,
+                kCIInputMaskImageKey: combined
+            ]
+        )
+
         let cropRect = CGRect(
             x: prompt.minX * 1024,
             y: (1 - prompt.maxY) * 1024,
@@ -206,7 +218,7 @@ public actor SegmentationService {
             height: prompt.height * 1024
         )
 
-        return combined.cropped(to: cropRect)
+        return colored.cropped(to: cropRect)
     }
     
     private func logitsToImage(logits: MLMultiArray) throws -> CIImage {

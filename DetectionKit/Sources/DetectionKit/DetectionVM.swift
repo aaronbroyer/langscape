@@ -424,8 +424,11 @@ public final class DetectionVM: ObservableObject {
         if !userRequestedSegmentationIDs.isEmpty {
             let staleRequests = userRequestedSegmentationIDs.subtracting(availableIDs)
             if !staleRequests.isEmpty {
+                let staleLabels = staleRequests.compactMap { id in
+                    trackState[id]?.label ?? "unknown"
+                }.joined(separator: ", ")
                 userRequestedSegmentationIDs.subtract(staleRequests)
-                Task { await logger.log("Segmentation: cleared \(staleRequests.count) stale requests", level: .debug, category: "DetectionKit.DetectionVM") }
+                Task { await logger.log("Segmentation: cleared \(staleRequests.count) stale requests: [\(staleLabels)]", level: .debug, category: "DetectionKit.DetectionVM") }
             }
         }
         maskMetadata = maskMetadata.filter { availableIDs.contains($0.key) }
@@ -508,7 +511,7 @@ public final class DetectionVM: ObservableObject {
         Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             do {
-                await self.logger.log("Segmentation starting for \(detection.label) (\(reason)) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
+                await self.logger.log("🔵 Segmentation starting for \(detection.label) (\(reason)) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
                 let mask = try await service.segment(request)
                 await MainActor.run {
 #if canImport(CoreImage)
@@ -519,11 +522,13 @@ public final class DetectionVM: ObservableObject {
                     self.segmentationSuspendUntil = nil
                     self.maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: detection.boundingBox, lastRequest: timestamp)
                 }
-                await self.logger.log("Segmentation mask ready for \(detection.label)", level: .info, category: "DetectionKit.DetectionVM")
+                await self.logger.log("✅ Segmentation mask ready for \(detection.label) [\(detectionID)]", level: .info, category: "DetectionKit.DetectionVM")
             } catch {
-                _ = await MainActor.run {
+                await MainActor.run {
                     self.pendingSegmentationDetections.remove(detectionID)
                 }
+                await self.logger.log("❌ Segmentation FAILED for \(detection.label) [\(detectionID)]: \(error.localizedDescription)", level: .error, category: "DetectionKit.DetectionVM")
+                await self.logger.log("Segmentation error details: \(String(describing: error))", level: .debug, category: "DetectionKit.DetectionVM")
                 await self.handleSegmentationFailure(error, label: detection.label)
             }
         }
@@ -535,16 +540,20 @@ public final class DetectionVM: ObservableObject {
     private func handleSegmentationFailure(_ error: Error, label: String) async {
         segmentationFailureCount += 1
         let message = "Segmentation failed for \(label): \(error.localizedDescription)"
-        if segmentationFailureCount >= segmentationFailureLimit {
+        let currentFailureCount = segmentationFailureCount
+        let failureLimit = segmentationFailureLimit
+        let backoff = segmentationFailureBackoff
+
+        if currentFailureCount >= failureLimit {
             segmentationDisabled = true
             #if canImport(CoreImage)
             segmentationMasks.removeAll()
             #endif
-            await logger.log("\(message). Disabling segmentation for the remainder of the session.", level: .error, category: "DetectionKit.DetectionVM")
+            await logger.log("🚫 \(message). Failure count: \(currentFailureCount)/\(failureLimit). Disabling segmentation for the remainder of the session.", level: .error, category: "DetectionKit.DetectionVM")
             return
         }
-        segmentationSuspendUntil = Date().addingTimeInterval(segmentationFailureBackoff)
-        await logger.log("\(message). Pausing segmentation for \(Int(segmentationFailureBackoff))s.", level: .warning, category: "DetectionKit.DetectionVM")
+        segmentationSuspendUntil = Date().addingTimeInterval(backoff)
+        await logger.log("⚠️ \(message). Failure count: \(currentFailureCount)/\(failureLimit). Pausing segmentation for \(Int(backoff))s.", level: .warning, category: "DetectionKit.DetectionVM")
     }
 
     private func promptRect(for boundingBox: NormalizedRect, pixelBuffer: CVPixelBuffer) -> CGRect {
