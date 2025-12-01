@@ -162,34 +162,51 @@ public actor SegmentationService {
     
     private func processMask(logits: MLMultiArray, prompt: CGRect, imageSize: CGSize) throws -> CIImage {
         let mask256 = try logitsToImage(logits: logits)
-        
         let upscale = mask256.transformed(by: CGAffineTransform(scaleX: 4.0, y: 4.0))
-        
-        let filter = CIFilter.colorThreshold()
-        filter.inputImage = upscale
-        filter.threshold = 0.0
-        
-        let edges = CIFilter.morphologyGradient()
-        edges.inputImage = filter.outputImage
-        edges.radius = 2.0
-        
-        guard let outline = edges.outputImage else { return upscale }
-        
-        let color = CIImage(color: CIColor(red: 0, green: 1, blue: 1, alpha: 1.0))
-            .cropped(to: outline.extent)
-        let coloredOutline = color.applyingFilter(
-            "CIMultiplyCompositing",
-            parameters: [kCIInputBackgroundImageKey: outline]
+
+        let threshold = CIFilter.colorThreshold()
+        threshold.inputImage = upscale
+        threshold.threshold = 0.0
+
+        let gradient = CIFilter.morphologyGradient()
+        gradient.inputImage = threshold.outputImage
+        gradient.radius = 2.5
+
+        guard let outline = gradient.outputImage else { return upscale }
+
+        let contrast = outline.applyingFilter(
+            "CIColorControls",
+            parameters: [kCIInputContrastKey: 1.8, kCIInputBrightnessKey: 0.1, kCIInputSaturationKey: 0.0]
         )
-        
+
+        let alphaMask = contrast.applyingFilter(
+            "CIColorMatrix",
+            parameters: [
+                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputAVector": CIVector(x: 0.3333, y: 0.3333, z: 0.3333, w: 0),
+                "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+            ]
+        )
+
+        let glow = alphaMask
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 4.0])
+            .cropped(to: outline.extent)
+
+        let combined = alphaMask.applyingFilter(
+            "CISourceOverCompositing",
+            parameters: [kCIInputBackgroundImageKey: glow]
+        )
+
         let cropRect = CGRect(
             x: prompt.minX * 1024,
             y: (1 - prompt.maxY) * 1024,
             width: prompt.width * 1024,
             height: prompt.height * 1024
         )
-        
-        return coloredOutline.cropped(to: cropRect)
+
+        return combined.cropped(to: cropRect)
     }
     
     private func logitsToImage(logits: MLMultiArray) throws -> CIImage {

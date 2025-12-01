@@ -63,6 +63,9 @@ struct CameraPreviewView: View {
             .onChange(of: gameViewModel.round) { _, _ in
                 requestSegmentationForCurrentRound()
             }
+            .onChange(of: viewModel.trackSnapshots) { _, _ in
+                requestSegmentationForCurrentRound()
+            }
             .onChange(of: scenePhase) { _, phase in
                 viewModel.updateAppLifecycle(isActive: phase == .active)
             }
@@ -74,11 +77,11 @@ struct CameraPreviewView: View {
         }
         .onAppear {
             viewModel.updateAppLifecycle(isActive: scenePhase == .active)
-            viewModel.setAutomaticSegmentationEnabled(false)
+            viewModel.setAutomaticSegmentationEnabled(true)
         }
         .onDisappear {
             viewModel.updateAppLifecycle(isActive: false)
-            viewModel.setAutomaticSegmentationEnabled(true)
+            viewModel.setAutomaticSegmentationEnabled(false)
         }
     }
 
@@ -484,7 +487,12 @@ struct CameraPreviewView: View {
 
     private func requestSegmentationForCurrentRound() {
         guard let round = gameViewModel.round else { return }
-        let pendingObjects = pendingRoundObjects(round: round, placedLabels: gameViewModel.placedLabels)
+        let roundObjects = pendingRoundObjects(round: round, placedLabels: gameViewModel.placedLabels)
+#if canImport(CoreImage)
+        let pendingObjects = roundObjects.filter { viewModel.segmentationMasks[$0.id] == nil }
+#else
+        let pendingObjects = roundObjects
+#endif
         guard !pendingObjects.isEmpty else { return }
 
         let availableIDs = Set(viewModel.trackSnapshots.map(\.id))
