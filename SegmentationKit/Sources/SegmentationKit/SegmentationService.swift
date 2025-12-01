@@ -79,12 +79,12 @@ public actor SegmentationService {
             throw NSError(domain: "Segmentation", code: -1, userInfo: [NSLocalizedDescriptionKey: "Embedding failed"])
         }
 
-        let (points, labels) = try makePrompts(from: request.prompt, originalSize: request.imageSize)
+        let (points, labels) = try makePrompts(from: request.prompt)
         let (sparse, dense) = try runPromptEncoder(points: points, labels: labels)
 
         let maskLogits = try runMaskDecoder(embedding: embedding, s0: s0, s1: s1, sparse: sparse, dense: dense)
         
-        return try processMask(logits: maskLogits, prompt: request.prompt, imageSize: request.imageSize)
+        return try processMask(logits: maskLogits, prompt: request.prompt)
     }
     
     private func loadModel(_ name: String, _ bundle: Bundle, _ config: MLModelConfiguration) throws -> MLModel {
@@ -105,15 +105,12 @@ public actor SegmentationService {
         self.cachedFeatsS1 = output.featureValue(for: "feats_s1")?.multiArrayValue
     }
     
-    private func makePrompts(from box: CGRect, originalSize: CGSize) throws -> (MLMultiArray, MLMultiArray) {
-        let scaleX = 1024.0 / originalSize.width
-        let scaleY = 1024.0 / originalSize.height
-        
-        let x1 = Float(box.minX * originalSize.width * scaleX)
-        let y1 = Float(box.minY * originalSize.height * scaleY)
-        
-        let x2 = Float(box.maxX * originalSize.width * scaleX)
-        let y2 = Float(box.maxY * originalSize.height * scaleY)
+    private func makePrompts(from rawBox: CGRect) throws -> (MLMultiArray, MLMultiArray) {
+        let box = clampNormalizedRect(rawBox)
+        let x1 = Float(box.minX * targetSize.width)
+        let y1 = Float(box.minY * targetSize.height)
+        let x2 = Float(box.maxX * targetSize.width)
+        let y2 = Float(box.maxY * targetSize.height)
 
         let count = 5
         let points = try MLMultiArray(shape: [1, NSNumber(value: count), 2], dataType: .float32)
@@ -160,7 +157,7 @@ public actor SegmentationService {
         return output.featureValue(for: "low_res_masks")!.multiArrayValue!
     }
     
-    private func processMask(logits: MLMultiArray, prompt: CGRect, imageSize: CGSize) throws -> CIImage {
+    private func processMask(logits: MLMultiArray, prompt rawPrompt: CGRect) throws -> CIImage {
         let mask256 = try logitsToImage(logits: logits)
         let upscale = mask256.transformed(by: CGAffineTransform(scaleX: 4.0, y: 4.0))
 
@@ -211,14 +208,25 @@ public actor SegmentationService {
             ]
         )
 
+        let prompt = clampNormalizedRect(rawPrompt)
         let cropRect = CGRect(
-            x: prompt.minX * 1024,
-            y: (1 - prompt.maxY) * 1024,
-            width: prompt.width * 1024,
-            height: prompt.height * 1024
+            x: prompt.minX * targetSize.width,
+            y: (1 - prompt.maxY) * targetSize.height,
+            width: max(prompt.width * targetSize.width, 1),
+            height: max(prompt.height * targetSize.height, 1)
         )
 
-        return colored.cropped(to: cropRect)
+        return colored.cropped(to: cropRect.integral)
+    }
+
+    private func clampNormalizedRect(_ rect: CGRect) -> CGRect {
+        let minX = max(0, min(1, rect.minX))
+        let minY = max(0, min(1, rect.minY))
+        let maxX = max(0, min(1, rect.maxX))
+        let maxY = max(0, min(1, rect.maxY))
+        let width = max(maxX - minX, 0.001)
+        let height = max(maxY - minY, 0.001)
+        return CGRect(x: minX, y: minY, width: width, height: height)
     }
     
     private func logitsToImage(logits: MLMultiArray) throws -> CIImage {
