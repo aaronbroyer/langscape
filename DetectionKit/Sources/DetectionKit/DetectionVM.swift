@@ -494,10 +494,11 @@ public final class DetectionVM: ObservableObject {
         timestamp: Date,
         service: SegmentationService
     ) {
-        let prompt = promptRect(for: detection.boundingBox, pixelBuffer: pixelBuffer)
+        let clampedBoundingBox = clampNormalizedRect(detection.boundingBox)
+        let prompt = promptRect(for: clampedBoundingBox, pixelBuffer: pixelBuffer)
         let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
         let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-        let maskBoundingBox = detection.boundingBox
+        let maskBoundingBox = clampedBoundingBox
         let request = SegmentationRequest(
             pixelBuffer: pixelBuffer,
             prompt: prompt,
@@ -505,7 +506,7 @@ public final class DetectionVM: ObservableObject {
             timestamp: timestamp.timeIntervalSince1970
         )
         let detectionID = detection.id
-        maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: detection.boundingBox, lastRequest: timestamp)
+        maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: clampedBoundingBox, lastRequest: timestamp)
         pendingSegmentationDetections.insert(detectionID)
 
         Task(priority: .userInitiated) { [weak self] in
@@ -520,7 +521,7 @@ public final class DetectionVM: ObservableObject {
                     self.pendingSegmentationDetections.remove(detectionID)
                     self.segmentationFailureCount = 0
                     self.segmentationSuspendUntil = nil
-                    self.maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: detection.boundingBox, lastRequest: timestamp)
+                    self.maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: maskBoundingBox, lastRequest: timestamp)
                 }
                 await self.logger.log("✅ Segmentation mask ready for \(detection.label) [\(detectionID)]", level: .info, category: "DetectionKit.DetectionVM")
             } catch {
@@ -557,13 +558,25 @@ public final class DetectionVM: ObservableObject {
     }
 
     private func promptRect(for boundingBox: NormalizedRect, pixelBuffer: CVPixelBuffer) -> CGRect {
-        // Segmentation pipeline now expects normalized coordinates (0-1) that match the
-        // detection output, so we simply mirror the values without scaling to pixels.
-        let x = CGFloat(boundingBox.origin.x)
-        let y = CGFloat(boundingBox.origin.y)
-        let w = CGFloat(boundingBox.size.width)
-        let h = CGFloat(boundingBox.size.height)
+        let rect = clampNormalizedRect(boundingBox)
+        let x = CGFloat(rect.origin.x)
+        let y = CGFloat(rect.origin.y)
+        let w = CGFloat(rect.size.width)
+        let h = CGFloat(rect.size.height)
         return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    private func clampNormalizedRect(_ rect: NormalizedRect) -> NormalizedRect {
+        let minX = max(0.0, min(1.0, rect.origin.x))
+        let minY = max(0.0, min(1.0, rect.origin.y))
+        let maxX = max(0.0, min(1.0, rect.origin.x + rect.size.width))
+        let maxY = max(0.0, min(1.0, rect.origin.y + rect.size.height))
+        let width = max(maxX - minX, 0.001)
+        let height = max(maxY - minY, 0.001)
+        return NormalizedRect(
+            origin: .init(x: minX, y: minY),
+            size: .init(width: width, height: height)
+        )
     }
 
     private func boundingBoxArea(_ rect: NormalizedRect) -> Double {

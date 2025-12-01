@@ -114,21 +114,21 @@ public actor SegmentationService {
 
         let count = 5
         let points = try MLMultiArray(shape: [1, NSNumber(value: count), 2], dataType: .float32)
-        let labels = try MLMultiArray(shape: [1, NSNumber(value: count)], dataType: .int32)
+        let labels = try MLMultiArray(shape: [1, NSNumber(value: count)], dataType: .float32)
         
         for i in 0..<count {
-            labels[[0, NSNumber(value: i)]] = -1
-            points[[0, NSNumber(value: i), 0]] = 0
-            points[[0, NSNumber(value: i), 1]] = 0
+            labels[[0, NSNumber(value: i)]] = NSNumber(value: Float(-1))
+            points[[0, NSNumber(value: i), 0]] = NSNumber(value: Float(0))
+            points[[0, NSNumber(value: i), 1]] = NSNumber(value: Float(0))
         }
         
         points[[0, 0, 0]] = NSNumber(value: x1)
         points[[0, 0, 1]] = NSNumber(value: y1)
-        labels[[0, 0]] = 2
+        labels[[0, 0]] = NSNumber(value: Float(2))
         
         points[[0, 1, 0]] = NSNumber(value: x2)
         points[[0, 1, 1]] = NSNumber(value: y2)
-        labels[[0, 1]] = 3
+        labels[[0, 1]] = NSNumber(value: Float(3))
         
         return (points, labels)
     }
