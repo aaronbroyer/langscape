@@ -14,8 +14,6 @@ packages:
     path: VocabStore
   LLMKit:
     path: LLMKit
-  SegmentationKit:
-    path: SegmentationKit
 
 targets:
   Langscape:
@@ -40,8 +38,6 @@ targets:
         product: VocabStore
       - package: LLMKit
         product: LLMKit
-      - package: SegmentationKit
-        product: SegmentationKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.langscape.app

@@ -7,9 +7,6 @@ import GameKitLS
 import UIComponents
 import DesignSystem
 import Utilities
-#if canImport(CoreImage)
-import CoreImage
-#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -27,9 +24,6 @@ struct CameraPreviewView: View {
     @State private var showCompletionFlash = false
     @State private var homeCardPressed = false
     @State private var startPulse = false
-#if canImport(CoreImage)
-    private static let maskCache = DetectionOverlayMaskCache()
-#endif
 
     var body: some View {
         GeometryReader { proxy in
@@ -60,12 +54,6 @@ struct CameraPreviewView: View {
                     gameViewModel.presentFatalError()
                 }
             }
-            .onChange(of: gameViewModel.round) { _, _ in
-                requestSegmentationForCurrentRound()
-            }
-            .onChange(of: viewModel.trackSnapshots) { _, _ in
-                requestSegmentationForCurrentRound()
-            }
             .onChange(of: scenePhase) { _, phase in
                 viewModel.updateAppLifecycle(isActive: phase == .active)
             }
@@ -77,11 +65,9 @@ struct CameraPreviewView: View {
         }
         .onAppear {
             viewModel.updateAppLifecycle(isActive: scenePhase == .active)
-            viewModel.setAutomaticSegmentationEnabled(true)
         }
         .onDisappear {
             viewModel.updateAppLifecycle(isActive: false)
-            viewModel.setAutomaticSegmentationEnabled(false)
         }
     }
 
@@ -92,17 +78,13 @@ struct CameraPreviewView: View {
             case .home:
                 homeOverlay
             case .scanning:
-                maskOverlay(in: size)
                 scanningIndicator
             case .ready:
-                maskOverlay(in: size)
                 startButton
             case .playing:
-                maskOverlay(in: size)
-                roundOverlay(in: size, interactive: true)
+                roundOverlay(in: size, interactive: true, showTargets: true)
             case .paused:
-                maskOverlay(in: size)
-                roundOverlay(in: size, interactive: false)
+                roundOverlay(in: size, interactive: false, showTargets: true)
             case .completed:
                 EmptyView()
             }
@@ -301,14 +283,14 @@ struct CameraPreviewView: View {
     }
 
     @ViewBuilder
-    private func roundOverlay(in size: CGSize, interactive: Bool) -> some View {
+    private func roundOverlay(in size: CGSize, interactive: Bool, showTargets: Bool) -> some View {
         if let round = gameViewModel.round {
             RoundPlayLayer(
                 round: round,
                 placedLabels: gameViewModel.placedLabels,
                 lastIncorrectLabelID: gameViewModel.lastIncorrectLabelID,
                 interactive: interactive,
-                showTargets: false,
+                showTargets: showTargets,
                 frameProvider: { boundingRect(for: $0, in: size) },
                 attemptMatch: { labelID, objectID in
                     gameViewModel.attemptMatch(labelID: labelID, on: objectID)
@@ -363,13 +345,11 @@ struct CameraPreviewView: View {
             }
         case .ready:
             startPulseAnimation()
-            print("CameraPreviewView: State .ready - prepping segmentation")
-            requestSegmentationForCurrentRound()
+            print("CameraPreviewView: State .ready")
         case .scanning:
-            print("CameraPreviewView: State .scanning - prepping segmentation")
+            print("CameraPreviewView: State .scanning")
         case .playing, .paused:
-            print("CameraPreviewView: State .playing/.paused - hiding 2D overlays")
-            requestSegmentationForCurrentRound()
+            print("CameraPreviewView: State .playing/.paused - showing targets")
         default:
             if startPulse {
                 withAnimation(.easeInOut(duration: 0.25)) {
@@ -405,129 +385,6 @@ struct CameraPreviewView: View {
         gameViewModel.beginScanning()
     }
 
-    private func maskOverlay(in size: CGSize) -> AnyView {
-#if canImport(CoreImage)
-        print("🎭 maskOverlay called for phase: \(gameViewModel.phase)")
-        guard shouldShowMaskOverlay(for: gameViewModel.phase),
-              let round = gameViewModel.round,
-              let cameraFrame = cameraFrameRect(in: size) else {
-            print("⚠️ maskOverlay early return: shouldShow=\(shouldShowMaskOverlay(for: gameViewModel.phase)), hasRound=\(gameViewModel.round != nil), hasCameraFrame=\(cameraFrameRect(in: size) != nil)")
-            return AnyView(
-                Color.clear
-                    .frame(width: size.width, height: size.height)
-                    .allowsHitTesting(false)
-            )
-        }
-        let pendingObjects = pendingRoundObjects(round: round, placedLabels: gameViewModel.placedLabels)
-        print("📊 Pending objects: \(pendingObjects.count)")
-        guard !pendingObjects.isEmpty else {
-            print("⚠️ No pending objects, returning clear view")
-            return AnyView(Color.clear.frame(width: size.width, height: size.height).allowsHitTesting(false))
-        }
-
-        print("🎯 Total segmentation masks: \(viewModel.segmentationMasks.count), Pending IDs: \(pendingObjects.count)")
-        var matchedMaskIDs = Set<UUID>()
-
-        let masks: [SegmentationMaskDrawable] = pendingObjects.compactMap { object in
-            guard let (maskID, maskResult) = matchedMask(for: object) else {
-                print("⚠️ No mask result for object \(object.id)")
-                return nil
-            }
-            matchedMaskIDs.insert(maskID)
-            if maskID == object.id {
-                print("✅ Found mask result for object \(object.id), extent: \(maskResult.image.extent)")
-            } else {
-                print("✅ Reusing mask \(maskID) for object \(object.id) (extent: \(maskResult.image.extent))")
-            }
-            print("🔍 Mask CIImage extent for \(object.id): \(maskResult.image.extent)")
-            guard let cgImage = Self.maskCache.image(for: maskID, mask: maskResult.image) else {
-                print("❌ Failed to create CGImage from mask for object \(object.id)")
-                return nil
-            }
-            print("✅ Created CGImage for \(object.id): size=\(cgImage.width)x\(cgImage.height)")
-            let viewBounds = CGRect(origin: .zero, size: size)
-            print("🔍 BoundingBox for \(object.id): origin=(\(maskResult.boundingBox.origin.x), \(maskResult.boundingBox.origin.y)) size=(\(maskResult.boundingBox.size.width)x\(maskResult.boundingBox.size.height))")
-            let projectedFrame = boundingRect(forNormalizedRect: maskResult.boundingBox, in: size)
-            print("🔍 Projected frame for \(object.id): \(projectedFrame)")
-            print("🔍 Camera frame: \(cameraFrame)")
-
-            // Intersect with camera frame, checking for valid intersection
-            guard projectedFrame.intersects(cameraFrame) else {
-                print("⚠️ Projected frame doesn't intersect camera frame for object \(object.id)")
-                return nil
-            }
-            var frame = projectedFrame.intersection(cameraFrame)
-
-            // Intersect with view bounds, checking for valid intersection
-            guard frame.intersects(viewBounds) else {
-                print("⚠️ Frame doesn't intersect view bounds for object \(object.id)")
-                return nil
-            }
-            frame = frame.intersection(viewBounds)
-
-            print("🔍 Final frame after intersections for \(object.id): \(frame)")
-            guard frame.width > 1, frame.height > 1, !frame.isNull, !frame.isInfinite else {
-                print("⚠️ Frame invalid or too small for object \(object.id): \(frame)")
-                return nil
-            }
-            print("✅ Rendering mask for object \(object.id) at frame: \(frame)")
-            return SegmentationMaskDrawable(id: object.id, cgImage: cgImage, frame: frame)
-        }
-        Self.maskCache.prune(keeping: matchedMaskIDs)
-        guard !masks.isEmpty else {
-            return AnyView(Color.clear.frame(width: size.width, height: size.height).allowsHitTesting(false))
-        }
-
-        return AnyView(
-            SegmentationOverlayLayer(
-                masks: masks,
-                viewSize: size
-            )
-        )
-#else
-        return AnyView(
-            Color.clear
-                .frame(width: size.width, height: size.height)
-                .allowsHitTesting(false)
-        )
-#endif
-    }
-
-    private func shouldShowMaskOverlay(for phase: LabelScrambleVM.Phase) -> Bool {
-        switch phase {
-        case .ready, .playing, .paused:
-            return true
-        default:
-            return false
-        }
-    }
-
-    private func pendingRoundObjects(round: Round, placedLabels: Set<GameKitLS.Label.ID>) -> [DetectedObject] {
-        let satisfiedIDs = Set(placedLabels.compactMap { round.target(for: $0) })
-        return round.objects.filter { !satisfiedIDs.contains($0.id) }
-    }
-
-    private func matchedMask(for object: DetectedObject) -> (UUID, SegmentationMaskResult)? {
-    #if canImport(CoreImage)
-        if let direct = viewModel.segmentationMasks[object.id] {
-            return (object.id, direct)
-        }
-        let best = viewModel.segmentationMasks.compactMap { entry -> (UUID, SegmentationMaskResult, CGFloat)? in
-            let (maskID, maskResult) = entry
-            let score = normalizedIoU(object.boundingBox, maskResult.boundingBox)
-            guard score >= 0.45 else { return nil }
-            return (maskID, maskResult, score)
-        }
-        .max(by: { $0.2 < $1.2 })
-
-        if let best {
-            print("ℹ️ Fallback mask reuse: using mask \(best.0) for object \(object.id) (IoU \(best.2))")
-            return (best.0, best.1)
-        }
-    #endif
-        return nil
-    }
-
     private func boundingRect(for detection: Detection, in viewSize: CGSize) -> CGRect {
         boundingRect(forNormalizedRect: detection.boundingBox, in: viewSize)
     }
@@ -542,83 +399,6 @@ struct CameraPreviewView: View {
         }
         return normalizedRect.rect(in: viewSize)
     }
-
-    private func cameraFrameRect(in viewSize: CGSize) -> CGRect? {
-        projectedCameraFrameRect(inputImageSize: viewModel.inputImageSize, viewSize: viewSize)
-    }
-
-    private func requestSegmentationForCurrentRound() {
-        guard let round = gameViewModel.round else { return }
-        let roundObjects = pendingRoundObjects(round: round, placedLabels: gameViewModel.placedLabels)
-#if canImport(CoreImage)
-        let pendingObjects = roundObjects.filter { viewModel.segmentationMasks[$0.id] == nil }
-#else
-        let pendingObjects = roundObjects
-#endif
-        guard !pendingObjects.isEmpty else { return }
-
-        let availableIDs = Set(viewModel.trackSnapshots.map(\.id))
-        for object in pendingObjects where availableIDs.contains(object.id) {
-            viewModel.requestSegmentation(for: object.id)
-        }
-    }
-}
-
-#if canImport(CoreImage)
-private struct SegmentationMaskDrawable: Identifiable {
-    let id: UUID
-    let cgImage: CGImage
-    let frame: CGRect
-}
-
-private struct SegmentationOverlayLayer: View {
-    let masks: [SegmentationMaskDrawable]
-    let viewSize: CGSize
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(masks) { mask in
-                glowingMask(for: mask)
-            }
-        }
-        .frame(width: viewSize.width, height: viewSize.height)
-        .allowsHitTesting(false)
-    }
-
-    private func glowingMask(for mask: SegmentationMaskDrawable) -> some View {
-        // Render the actual SAM-generated mask with object-shaped outline
-        let uiImage = UIImage(cgImage: mask.cgImage)
-
-        return Image(uiImage: uiImage)
-            .resizable()
-            .interpolation(.high)
-            .frame(width: mask.frame.width, height: mask.frame.height)
-            .position(x: mask.frame.midX, y: mask.frame.midY)
-    }
-}
-
-private final class DetectionOverlayMaskCache {
-    private let context = CIContext()
-    private var cache: [UUID: CGImage] = [:]
-
-    func image(for id: UUID, mask: CIImage) -> CGImage? {
-        if let cached = cache[id] {
-            return cached
-        }
-        guard let cgImage = context.createCGImage(mask, from: mask.extent) else { return nil }
-        cache[id] = cgImage
-        return cgImage
-    }
-
-    func prune(keeping ids: Set<UUID>) {
-        guard !ids.isEmpty else {
-            cache.removeAll()
-            return
-        }
-        cache = cache.filter { ids.contains($0.key) }
-    }
-}
-#endif
 
 private struct RoundPlayLayer: View {
     let round: Round
@@ -858,27 +638,6 @@ private extension DetectionRect {
     }
 }
 
-private func normalizedIoU(_ a: DetectionRect, _ b: DetectionRect) -> CGFloat {
-    let ax1 = CGFloat(a.origin.x)
-    let ay1 = CGFloat(a.origin.y)
-    let ax2 = ax1 + CGFloat(a.size.width)
-    let ay2 = ay1 + CGFloat(a.size.height)
-
-    let bx1 = CGFloat(b.origin.x)
-    let by1 = CGFloat(b.origin.y)
-    let bx2 = bx1 + CGFloat(b.size.width)
-    let by2 = by1 + CGFloat(b.size.height)
-
-    let ix = max(0, min(ax2, bx2) - max(ax1, bx1))
-    let iy = max(0, min(ay2, by2) - max(ay1, by1))
-    let inter = ix * iy
-    guard inter > 0 else { return 0 }
-    let areaA = max(ax2 - ax1, 0) * max(ay2 - ay1, 0)
-    let areaB = max(bx2 - bx1, 0) * max(by2 - by1, 0)
-    let union = max(areaA + areaB - inter, .leastNonzeroMagnitude)
-    return inter / union
-}
-
 private struct ARCameraView: UIViewRepresentable {
     let viewModel: DetectionVM
     let gameViewModel: LabelScrambleVM
@@ -896,19 +655,14 @@ private struct ARCameraView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {
-#if canImport(CoreImage)
-        context.coordinator.updateWorldGlows(
+        context.coordinator.updateStickyLabels(
             arView: uiView,
             phase: gameViewModel.phase,
             round: gameViewModel.round,
             placedLabels: gameViewModel.placedLabels,
             trackSnapshots: viewModel.trackSnapshots,
-            segmentationMasks: viewModel.segmentationMasks,
             inputImageSize: viewModel.inputImageSize
         )
-#else
-        context.coordinator.clearAnchors(from: uiView)
-#endif
     }
 
     static func dismantleUIView(_ uiView: ARView, coordinator: ARSessionCoordinator) {
@@ -923,10 +677,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
     private weak var arView: ARView?
     private var lastFrameTime: TimeInterval = 0
     private let logger = Logger.shared
-#if canImport(CoreImage)
-    private var glowOverlays: [UUID: GlowOverlay] = [:]
-    private let textureCache = MaskTextureCache()
-#endif
+    private var labelAnchors: [UUID: LabelAnchor] = [:]
 
     init(viewModel: DetectionVM, contextManager: ContextManager) {
         self.viewModel = viewModel
@@ -945,36 +696,29 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
 
     @MainActor
     func detach(from arView: ARView) {
-#if canImport(CoreImage)
         clearAnchors(from: arView)
-#endif
         arView.session.delegate = nil
         self.arView = nil
     }
 
     @MainActor
     func clearAnchors(from arView: ARView) {
-#if canImport(CoreImage)
-        for overlay in glowOverlays.values {
-            overlay.anchor.removeFromParent()
+        for anchor in labelAnchors.values {
+            anchor.anchor.removeFromParent()
         }
-        glowOverlays.removeAll()
-        textureCache.removeAll()
-#endif
+        labelAnchors.removeAll()
     }
 
-#if canImport(CoreImage)
     @MainActor
-    func updateWorldGlows(
+    func updateStickyLabels(
         arView: ARView,
         phase: LabelScrambleVM.Phase,
         round: Round?,
         placedLabels: Set<GameKitLS.Label.ID>,
         trackSnapshots: [DetectionTrackSnapshot],
-        segmentationMasks: [UUID: SegmentationMaskResult],
         inputImageSize: CGSize?
     ) {
-        guard shouldRenderGlows(for: phase), let round else {
+        guard shouldRenderLabels(for: phase), let round else {
             clearAnchors(from: arView)
             return
         }
@@ -983,61 +727,50 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             return
         }
 
-        let pendingIDs = pendingObjectIDs(in: round, placedLabels: placedLabels)
-        guard !pendingIDs.isEmpty else {
+        let snapshotLookup = Dictionary(uniqueKeysWithValues: trackSnapshots.map { ($0.id, $0) })
+        let placedObjects: [(id: UUID, label: String, box: DetectionRect)] = placedLabels.compactMap { labelID in
+            guard let objectID = round.target(for: labelID),
+                  let label = round.label(with: labelID)?.text ?? round.labels.first(where: { $0.objectID == objectID })?.text,
+                  let snapshot = snapshotLookup[objectID] else { return nil }
+            return (objectID, label, snapshot.boundingBox)
+        }
+
+        guard !placedObjects.isEmpty else {
             clearAnchors(from: arView)
             return
         }
 
-        let snapshotLookup = Dictionary(uniqueKeysWithValues: trackSnapshots.map { ($0.id, $0) })
-        let activeOverlayIDs: Set<UUID> = Set(segmentationMasks.keys.filter { pendingIDs.contains($0) })
+        var activeAnchors: Set<UUID> = []
+        for entry in placedObjects {
+            guard let viewRect = projectedRect(for: entry.box, inputImageSize: inputImageSize, viewSize: arView.bounds.size),
+                  viewRect.width > 2, viewRect.height > 2,
+                  let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView),
+                  isRaycastValid(raycastResult, camera: frame.camera) else { continue }
 
-        if !segmentationMasks.isEmpty {
-            for (maskID, mask) in segmentationMasks {
-                guard pendingIDs.contains(maskID),
-                      let snapshot = snapshotLookup[maskID],
-                      let viewRect = projectedRect(for: mask.boundingBox, inputImageSize: inputImageSize, viewSize: arView.bounds.size),
-                      viewRect.width > 2, viewRect.height > 2,
-                      let raycastResult = raycast(at: CGPoint(x: viewRect.midX, y: viewRect.midY), in: arView),
-                      isRaycastValid(raycastResult, camera: frame.camera) else { continue }
+            let depth = distanceFromCamera(to: raycastResult.worldTransform.translation, camera: frame.camera)
+            let planeSize = planeSizeInMeters(for: entry.box, depth: depth, inputImageSize: inputImageSize, camera: frame.camera) ?? SIMD2<Float>(0.22, 0.12)
 
-                let depth = distanceFromCamera(to: raycastResult.worldTransform.translation, camera: frame.camera)
-                guard let planeSize = planeSizeInMeters(for: mask.boundingBox, depth: depth, inputImageSize: inputImageSize, camera: frame.camera) else { continue }
-
-                guard let texture = textureCache.texture(for: maskID, mask: mask.image) else {
-                    print("⚠️ Segmentation mask texture missing for \(maskID). Skipping anchor to avoid full-screen overlay.")
-                    continue
-                }
-                placeOverlay(
-                    id: maskID,
-                    texture: texture,
-                    size: planeSize,
-                    raycastResult: raycastResult,
-                    camera: frame.camera,
-                    arView: arView
-                )
-            }
+            placeLabel(
+                id: entry.id,
+                text: entry.label,
+                size: planeSize,
+                raycastResult: raycastResult,
+                camera: frame.camera,
+                arView: arView
+            )
+            activeAnchors.insert(entry.id)
         }
 
-        pruneInactiveOverlays(keeping: activeOverlayIDs)
-        textureCache.prune(keeping: activeOverlayIDs)
+        pruneInactiveAnchors(keeping: activeAnchors)
     }
 
-    private func shouldRenderGlows(for phase: LabelScrambleVM.Phase) -> Bool {
+    private func shouldRenderLabels(for phase: LabelScrambleVM.Phase) -> Bool {
         switch phase {
-        case .ready, .playing, .paused:
+        case .playing, .paused:
             return true
         default:
             return false
         }
-    }
-
-    private func pendingObjectIDs(in round: Round, placedLabels: Set<GameKitLS.Label.ID>) -> Set<DetectedObject.ID> {
-        if placedLabels.isEmpty {
-            return Set(round.objects.map(\.id))
-        }
-        let satisfied = Set(placedLabels.compactMap { round.target(for: $0) })
-        return Set(round.objects.compactMap { satisfied.contains($0.id) ? nil : $0.id })
     }
 
     private func raycast(at point: CGPoint, in arView: ARView) -> ARRaycastResult? {
@@ -1082,59 +815,77 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
     }
 
     @MainActor
-    private func placeOverlay(
+    private func placeLabel(
         id: UUID,
-        texture: TextureResource,
+        text: String,
         size: SIMD2<Float>,
         raycastResult: ARRaycastResult,
         camera: ARCamera,
         arView: ARView
     ) {
-        let width = max(size.x, 0.3)
-        let height = max(size.y, 0.3)
-        let mesh = MeshResource.generatePlane(width: width, height: height)
-
-        var material = UnlitMaterial()
-        let baseTint = UIColor.systemCyan
-        material.color = .init(tint: baseTint.withAlphaComponent(0.95))
-        let opacityTexture = MaterialParameters.Texture(texture)
-        material.blending = .transparent(opacity: .init(texture: opacityTexture))
-
+        let width = max(size.x * 0.6, 0.14)
+        let height = max(size.y * 0.35, 0.10)
         let transform = Transform(matrix: raycastResult.worldTransform)
         let cameraPosition = camera.transform.translation
 
-        if let overlay = glowOverlays[id] {
-            overlay.anchor.transform = transform
-            overlay.entity.model = ModelComponent(mesh: mesh, materials: [material])
-            overlay.entity.look(at: cameraPosition, from: transform.translation, relativeTo: nil)
+        if let anchor = labelAnchors[id] {
+            anchor.anchor.transform = transform
+            anchor.card.look(at: cameraPosition, from: transform.translation, relativeTo: nil)
         } else {
             let anchor = AnchorEntity(world: raycastResult.worldTransform)
-            let entity = ModelEntity(mesh: mesh, materials: [material])
-            entity.look(at: cameraPosition, from: transform.translation, relativeTo: nil)
-            anchor.addChild(entity)
+            let card = makeLabelCard(text: text, size: CGSize(width: CGFloat(width), height: CGFloat(height)))
+            card.look(at: cameraPosition, from: transform.translation, relativeTo: nil)
+            anchor.addChild(card)
             arView.scene.addAnchor(anchor)
-            glowOverlays[id] = GlowOverlay(anchor: anchor, entity: entity)
+            labelAnchors[id] = LabelAnchor(anchor: anchor, card: card)
         }
     }
 
-    private func pruneInactiveOverlays(keeping activeIDs: Set<UUID>) {
+    private func pruneInactiveAnchors(keeping activeIDs: Set<UUID>) {
         guard !activeIDs.isEmpty else {
-            for overlay in glowOverlays.values {
-                overlay.anchor.removeFromParent()
+            for anchor in labelAnchors.values {
+                anchor.anchor.removeFromParent()
             }
-            glowOverlays.removeAll()
+            labelAnchors.removeAll()
             return
         }
 
-        let stale = glowOverlays.keys.filter { !activeIDs.contains($0) }
+        let stale = labelAnchors.keys.filter { !activeIDs.contains($0) }
         for id in stale {
-            if let overlay = glowOverlays[id] {
-                overlay.anchor.removeFromParent()
+            if let anchor = labelAnchors[id] {
+                anchor.anchor.removeFromParent()
             }
-            glowOverlays.removeValue(forKey: id)
+            labelAnchors.removeValue(forKey: id)
         }
     }
-#endif
+
+    private func makeLabelCard(text: String, size: CGSize) -> ModelEntity {
+        let plane = MeshResource.generatePlane(width: Float(size.width), height: Float(size.height))
+        var background = UnlitMaterial()
+        let accent = UIColor(ColorPalette.accent.swiftUIColor)
+        background.color = .init(tint: accent.withAlphaComponent(0.82))
+        let card = ModelEntity(mesh: plane, materials: [background])
+
+        if let textMesh = try? MeshResource.generateText(
+            text,
+            extrusionDepth: 0.002,
+            font: .systemFont(ofSize: 0.16),
+            containerFrame: .zero,
+            alignment: .center,
+            lineBreakMode: .byWordWrapping
+        ) {
+            var textMaterial = UnlitMaterial()
+            textMaterial.color = .init(tint: UIColor.white)
+            let textEntity = ModelEntity(mesh: textMesh, materials: [textMaterial])
+            textEntity.scale = SIMD3<Float>(repeating: 0.01)
+            textEntity.position = SIMD3<Float>(0, 0, 0.01)
+            textEntity.orientation = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+            card.addChild(textEntity)
+        }
+
+        card.generateCollisionShapes(recursive: true)
+        return card
+    }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let now = Date().timeIntervalSince1970
@@ -1180,47 +931,10 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
     }
 }
 
-#if canImport(CoreImage)
-private struct GlowOverlay {
+private struct LabelAnchor {
     let anchor: AnchorEntity
-    let entity: ModelEntity
+    let card: ModelEntity
 }
-
-private final class MaskTextureCache {
-    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
-    private var cache: [UUID: TextureResource] = [:]
-    private let options = TextureResource.CreateOptions(semantic: .raw)
-
-    @MainActor
-    func texture(for id: UUID, mask: CIImage) -> TextureResource? {
-        if let cached = cache[id] {
-            return cached
-        }
-        guard let cgImage = ciContext.createCGImage(mask, from: mask.extent) else {
-            return nil
-        }
-        guard let texture = try? TextureResource.generate(from: cgImage, options: options) else {
-            return nil
-        }
-        cache[id] = texture
-        return texture
-    }
-
-    @MainActor
-    func prune(keeping ids: Set<UUID>) {
-        guard !ids.isEmpty else {
-            cache.removeAll()
-            return
-        }
-        cache = cache.filter { ids.contains($0.key) }
-    }
-
-    @MainActor
-    func removeAll() {
-        cache.removeAll()
-    }
-}
-#endif
 
 private func projectedRect(
     for normalizedRect: DetectionRect,

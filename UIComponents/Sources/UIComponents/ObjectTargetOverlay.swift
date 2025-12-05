@@ -19,11 +19,12 @@ public struct ObjectTargetOverlay: View {
 
     public var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .strokeBorder(borderColor, lineWidth: borderWidth)
-            .background(
+            .fill(fillGradient)
+            .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(fillColor)
+                    .strokeBorder(borderColor, lineWidth: borderWidth)
             )
+            .shadow(color: glowColor.opacity(0.35), radius: 12, x: 0, y: 8)
             .frame(width: frame.width, height: frame.height)
             .position(x: frame.midX, y: frame.midY)
             .animation(.easeInOut(duration: 0.25), value: state)
@@ -38,18 +39,41 @@ public struct ObjectTargetOverlay: View {
     private var borderColor: Color {
         switch state {
         case .pending:
-            return ColorPalette.secondary.swiftUIColor.opacity(0.75)
+            return ColorPalette.accent.swiftUIColor.opacity(0.85)
         case .satisfied:
             return ColorPalette.primary.swiftUIColor
         }
     }
 
-    private var fillColor: Color {
+    private var glowColor: Color {
         switch state {
         case .pending:
-            return Color.black.opacity(0.12)
+            return ColorPalette.accent.swiftUIColor
         case .satisfied:
-            return ColorPalette.primary.swiftUIColor.opacity(0.25)
+            return ColorPalette.primary.swiftUIColor
+        }
+    }
+
+    private var fillGradient: LinearGradient {
+        switch state {
+        case .pending:
+            return LinearGradient(
+                colors: [
+                    ColorPalette.accent.swiftUIColor.opacity(0.20),
+                    ColorPalette.primary.swiftUIColor.opacity(0.08)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        case .satisfied:
+            return LinearGradient(
+                colors: [
+                    ColorPalette.primary.swiftUIColor.opacity(0.30),
+                    ColorPalette.primary.swiftUIColor.opacity(0.15)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
         }
     }
 }

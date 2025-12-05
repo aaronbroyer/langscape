@@ -14,23 +14,8 @@ public struct CGSize: Equatable, Sendable {
 #endif
 import Utilities
 
-#if canImport(CoreImage)
-import CoreImage
-#endif
-
-#if canImport(CoreImage)
-public struct SegmentationMaskResult: Sendable {
-    public let image: CIImage
-    public let boundingBox: NormalizedRect
-}
-#endif
-
 #if canImport(CoreVideo)
 import CoreVideo
-#endif
-
-#if canImport(SegmentationKit)
-import SegmentationKit
 #endif
 
 #if canImport(Combine)
@@ -57,9 +42,6 @@ public final class DetectionVM: ObservableObject {
     @Published public private(set) var fps: Double = 0
     @Published public private(set) var lastError: DetectionError?
     @Published public private(set) var inputImageSize: CGSize?
-#if canImport(CoreImage)
-    @Published public private(set) var segmentationMasks: [UUID: SegmentationMaskResult] = [:]
-#endif
 
     public let throttleInterval: TimeInterval
 
@@ -77,25 +59,6 @@ public final class DetectionVM: ObservableObject {
     private var auxiliaryLoadTask: Task<Void, Never>?
     private var trackState: [UUID: DetectionTrackSnapshot] = [:]
     private let trackRetentionDuration: TimeInterval = 2.5
-#if canImport(SegmentationKit) && canImport(CoreVideo)
-    private let segmentationServiceBox: AnyObject?
-    private var pendingSegmentationDetections: Set<UUID> = []
-    private var userRequestedSegmentationIDs: Set<UUID> = []
-    private let segmentationConfidenceGate: Double = 0.55
-    private let segmentationAreaGate: Double = 0.60
-    private var automaticSegmentationEnabled = false
-    private var segmentationFailureCount = 0
-    private var segmentationSuspendUntil: Date?
-    private var segmentationDisabled = false
-    private let segmentationFailureLimit = 3
-    private let segmentationFailureBackoff: TimeInterval = 10
-    private var segmentationPrepared = false
-    private var segmentationPrepareTask: Task<Void, Never>?
-    private var maskMetadata: [UUID: SegmentationMaskMetadata] = [:]
-    private let maskRefreshIoUThreshold: Double = 0.75
-    private let maskRefreshInterval: TimeInterval = 1.5
-    private var inFlightSegmentationTasks: [UUID: Task<Void, Never>] = [:]
-#endif
     private let activeInFlightLimit = 2
     private let suspendedInFlightLimit = 0
     private var maxInFlightRequests: Int { isAppActive ? activeInFlightLimit : suspendedInFlightLimit }
@@ -108,8 +71,7 @@ public final class DetectionVM: ObservableObject {
         fpsWindow: TimeInterval,
         logger: Logger,
         errorStore: ErrorStore,
-        geminiAPIKey: String?,
-        segmentationServiceBox: AnyObject?
+        geminiAPIKey: String?
     ) {
         self.throttleInterval = throttleInterval
         self.logger = logger
@@ -118,50 +80,9 @@ public final class DetectionVM: ObservableObject {
         self.refiner = nil
         self.fpsWindow = fpsWindow
         self.errorStore = errorStore
-#if canImport(SegmentationKit) && canImport(CoreVideo)
-        self.segmentationServiceBox = segmentationServiceBox
-#else
-        _ = segmentationServiceBox
-#endif
         startAuxiliaryModelLoad(geminiAPIKey: geminiAPIKey)
-#if canImport(SegmentationKit) && canImport(CoreVideo)
-        if let serviceObject = segmentationServiceBox {
-            startSegmentationPreparation(serviceObject: serviceObject)
-        }
-#endif
     }
 
-#if canImport(SegmentationKit) && canImport(CoreVideo)
-    public convenience init(
-        service: any DetectionService,
-        throttleInterval: TimeInterval = 0.06,
-        fpsWindow: TimeInterval = 1,
-        logger: Logger = .shared,
-        errorStore: ErrorStore = .shared,
-        geminiAPIKey: String? = nil,
-        segmentationService: AnyObject? = nil
-    ) {
-        let resolvedService: AnyObject?
-        if #available(iOS 17.0, macOS 15.0, tvOS 17.0, watchOS 10.0, *) {
-            if let override = segmentationService as? SegmentationService {
-                resolvedService = override
-            } else {
-                resolvedService = SegmentationService.shared
-            }
-        } else {
-            resolvedService = nil
-        }
-        self.init(
-            service: service,
-            throttleInterval: throttleInterval,
-            fpsWindow: fpsWindow,
-            logger: logger,
-            errorStore: errorStore,
-            geminiAPIKey: geminiAPIKey,
-            segmentationServiceBox: resolvedService
-        )
-    }
-#else
     public convenience init(
         service: any DetectionService,
         throttleInterval: TimeInterval = 0.06,
@@ -176,11 +97,9 @@ public final class DetectionVM: ObservableObject {
             fpsWindow: fpsWindow,
             logger: logger,
             errorStore: errorStore,
-            geminiAPIKey: geminiAPIKey,
-            segmentationServiceBox: nil
+            geminiAPIKey: geminiAPIKey
         )
     }
-#endif
 
     public func setInputSize(_ size: CGSize) {
         self.inputImageSize = size
@@ -196,17 +115,9 @@ public final class DetectionVM: ObservableObject {
             fpsWindowStart = nil
             processedFrames = 0
             droppedFrames = 0
-#if canImport(SegmentationKit) && canImport(CoreVideo)
-            resetSegmentationStateForSuspend()
-#endif
             Task { await logger.log("DetectionVM: App suspended – pausing detection and GPU work.", level: .info, category: "DetectionKit.DetectionVM") }
         } else {
             Task { await logger.log("DetectionVM: App active – resuming detection pipeline.", level: .info, category: "DetectionKit.DetectionVM") }
-#if canImport(SegmentationKit) && canImport(CoreVideo)
-            if let serviceObject = segmentationServiceBox, !segmentationPrepared {
-                startSegmentationPreparation(serviceObject: serviceObject)
-            }
-#endif
         }
     }
 
@@ -260,13 +171,6 @@ public final class DetectionVM: ObservableObject {
                     let pb: CVPixelBuffer = request.pixelBuffer
                     detections = refiner.refine(detections, pixelBuffer: pb, orientationRaw: request.imageOrientationRaw)
                 }
-                #if canImport(SegmentationKit) && canImport(CoreVideo)
-                await viewModel.evaluateSegmentationTriggers(
-                    detections,
-                    pixelBuffer: request.pixelBuffer,
-                    timestamp: request.timestamp
-                )
-                #endif
                 #endif
                 let countForLog = detections.count
                 let labelsForLog = detections.map { "\($0.label)(\(Int($0.confidence*100))%)" }.joined(separator: ", ")
@@ -311,28 +215,6 @@ public final class DetectionVM: ObservableObject {
         }
     }
 
-#if canImport(SegmentationKit) && canImport(CoreVideo)
-    public func requestSegmentation(for detectionID: UUID) {
-        userRequestedSegmentationIDs.insert(detectionID)
-        let label = detections.first(where: { $0.id == detectionID })?.label ?? "unknown"
-        Task { await logger.log("Segmentation manually requested for \(label) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM") }
-    }
-
-    public func setAutomaticSegmentationEnabled(_ enabled: Bool) {
-        automaticSegmentationEnabled = enabled
-    }
-
-    public func consumeSegmentationMask(for detectionID: UUID) {
-        // Masks persist per track; no manual consumption.
-    }
-#else
-    public func requestSegmentation(for detectionID: UUID) {}
-    public func setAutomaticSegmentationEnabled(_ enabled: Bool) {}
-#if canImport(CoreImage)
-    public func consumeSegmentationMask(for detectionID: UUID) {}
-#endif
-#endif
-
     private func startAuxiliaryModelLoad(geminiAPIKey: String?) {
         auxiliaryLoadTask?.cancel()
         let logger = self.logger
@@ -344,30 +226,6 @@ public final class DetectionVM: ObservableObject {
             self.refiner = result.refiner
         }
     }
-
-#if canImport(SegmentationKit) && canImport(CoreVideo)
-    private func startSegmentationPreparation(serviceObject: AnyObject) {
-        guard #available(iOS 17.0, macOS 15.0, tvOS 17.0, watchOS 10.0, *),
-              let service = serviceObject as? SegmentationService else { return }
-        segmentationPrepareTask?.cancel()
-        segmentationPrepared = false
-        segmentationPrepareTask = Task { [weak self] in
-            do {
-                try await service.prepare()
-                await MainActor.run {
-                    guard let self else { return }
-                    self.segmentationPrepared = true
-                }
-                await self?.logger.log("SegmentationService prepared", level: .info, category: "DetectionKit.DetectionVM")
-            } catch {
-                await self?.logger.log("SegmentationService prepare failed: \(error.localizedDescription)", level: .error, category: "DetectionKit.DetectionVM")
-            }
-            await MainActor.run { [weak self] in
-                self?.segmentationPrepareTask = nil
-            }
-        }
-    }
-#endif
 
     nonisolated private static func prepareAuxiliaryModels(logger: Logger, geminiAPIKey: String?, loadReferee: Bool) async -> (referee: VLMReferee?, refiner: ClassificationRefiner?) {
         var loadedReferee: VLMReferee?
@@ -407,236 +265,6 @@ public final class DetectionVM: ObservableObject {
         Task { await errorStore.add(LoggedError(message: message, metadata: combined)) }
     }
 
-#if canImport(SegmentationKit) && canImport(CoreVideo)
-    @MainActor
-    private func evaluateSegmentationTriggers(_ detections: [Detection], pixelBuffer: CVPixelBuffer, timestamp: Date) {
-        guard #available(iOS 17.0, macOS 15.0, tvOS 17.0, watchOS 10.0, *),
-              let service = segmentationServiceBox as? SegmentationService else { return }
-        if !segmentationPrepared {
-            if segmentationPrepareTask == nil {
-                startSegmentationPreparation(serviceObject: service)
-            }
-            return
-        }
-        if segmentationDisabled { return }
-        if let suspendUntil = segmentationSuspendUntil, Date() < suspendUntil { return }
-
-        let availableIDs = Set(detections.map(\.id))
-        if !userRequestedSegmentationIDs.isEmpty {
-            let staleRequests = userRequestedSegmentationIDs.subtracting(availableIDs)
-            if !staleRequests.isEmpty {
-                let staleLabels = staleRequests.compactMap { id in
-                    trackState[id]?.label ?? "unknown"
-                }.joined(separator: ", ")
-                userRequestedSegmentationIDs.subtract(staleRequests)
-                Task { await logger.log("Segmentation: cleared \(staleRequests.count) stale requests: [\(staleLabels)]", level: .debug, category: "DetectionKit.DetectionVM") }
-            }
-        }
-        maskMetadata = maskMetadata.filter { availableIDs.contains($0.key) }
-
-        let manualDetections = detections.filter { userRequestedSegmentationIDs.contains($0.id) }
-        if let manualTarget = nextSegmentationCandidate(from: manualDetections, timestamp: timestamp, allowLargeTargets: true) {
-            userRequestedSegmentationIDs.remove(manualTarget.id)
-            scheduleSegmentation(for: manualTarget, reason: "manual", pixelBuffer: pixelBuffer, timestamp: timestamp, service: service)
-            return
-        }
-
-        guard automaticSegmentationEnabled else { return }
-        let autoEligible = detections.filter {
-            $0.confidence >= segmentationConfidenceGate &&
-            boundingBoxArea($0.boundingBox) <= segmentationAreaGate
-        }
-        if let autoTarget = nextSegmentationCandidate(from: autoEligible, timestamp: timestamp, allowLargeTargets: false) {
-            scheduleSegmentation(for: autoTarget, reason: "automatic", pixelBuffer: pixelBuffer, timestamp: timestamp, service: service)
-        }
-    }
-
-    private func nextSegmentationCandidate(
-        from detections: [Detection],
-        timestamp: Date,
-        allowLargeTargets: Bool
-    ) -> Detection? {
-        for detection in detections {
-            guard !pendingSegmentationDetections.contains(detection.id) else { continue }
-            if !allowLargeTargets {
-                guard detection.confidence >= segmentationConfidenceGate else { continue }
-                guard boundingBoxArea(detection.boundingBox) <= segmentationAreaGate else { continue }
-            }
-            guard shouldRequestMask(for: detection, timestamp: timestamp) else { continue }
-            return detection
-        }
-        return nil
-    }
-
-    private func shouldRequestMask(for detection: Detection, timestamp: Date) -> Bool {
-        let id = detection.id
-        if pendingSegmentationDetections.contains(id) { return false }
-#if canImport(CoreImage)
-        let hasMask = segmentationMasks[id] != nil
-#else
-        let hasMask = false
-#endif
-        guard let metadata = maskMetadata[id] else {
-            return true
-        }
-        if !hasMask {
-            return true
-        }
-        let moved = trackIoU(metadata.lastBoundingBox, detection.boundingBox) < maskRefreshIoUThreshold
-        let stale = timestamp.timeIntervalSince(metadata.lastRequest) >= maskRefreshInterval
-        return moved || stale
-    }
-
-    @available(iOS 17.0, macOS 15.0, tvOS 17.0, watchOS 10.0, *)
-    private func scheduleSegmentation(
-        for detection: Detection,
-        reason: String,
-        pixelBuffer: CVPixelBuffer,
-        timestamp: Date,
-        service: SegmentationService
-    ) {
-        guard isAppActive else {
-            Task { await logger.log("⚠️ Skipping segmentation for \(detection.label) - app is inactive", level: .debug, category: "DetectionKit.DetectionVM") }
-            return
-        }
-        let clampedBoundingBox = clampNormalizedRect(detection.boundingBox)
-        let prompt = promptRect(for: clampedBoundingBox, pixelBuffer: pixelBuffer)
-        let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
-        let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-        let maskBoundingBox = clampedBoundingBox
-        let request = SegmentationRequest(
-            pixelBuffer: pixelBuffer,
-            prompt: prompt,
-            imageSize: CGSize(width: width, height: height),
-            timestamp: timestamp.timeIntervalSince1970
-        )
-        let detectionID = detection.id
-        maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: clampedBoundingBox, lastRequest: timestamp)
-        pendingSegmentationDetections.insert(detectionID)
-
-        let task = Task(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            do {
-                await self.logger.log("🔵 Segmentation starting for \(detection.label) (\(reason)) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
-                let mask = try await service.segment(request)
-                await MainActor.run {
-#if canImport(CoreImage)
-                    self.segmentationMasks[detectionID] = SegmentationMaskResult(image: mask, boundingBox: maskBoundingBox)
-#endif
-                    self.pendingSegmentationDetections.remove(detectionID)
-                    self.segmentationFailureCount = 0
-                    self.segmentationSuspendUntil = nil
-                    self.maskMetadata[detectionID] = SegmentationMaskMetadata(lastBoundingBox: maskBoundingBox, lastRequest: timestamp)
-                    self.inFlightSegmentationTasks.removeValue(forKey: detectionID)
-                }
-                await self.logger.log("✅ Segmentation mask ready for \(detection.label) [\(detectionID)]", level: .info, category: "DetectionKit.DetectionVM")
-            } catch {
-                await MainActor.run {
-                    self.pendingSegmentationDetections.remove(detectionID)
-                    self.inFlightSegmentationTasks.removeValue(forKey: detectionID)
-                }
-                if error is CancellationError {
-                    await self.logger.log("⚠️ Segmentation cancelled for \(detection.label) [\(detectionID)]", level: .debug, category: "DetectionKit.DetectionVM")
-                } else {
-                    await self.logger.log("❌ Segmentation FAILED for \(detection.label) [\(detectionID)]: \(error.localizedDescription)", level: .error, category: "DetectionKit.DetectionVM")
-                    await self.logger.log("Segmentation error details: \(String(describing: error))", level: .debug, category: "DetectionKit.DetectionVM")
-                    await self.handleSegmentationFailure(error, label: detection.label)
-                }
-            }
-        }
-        inFlightSegmentationTasks[detectionID] = task
-    }
-#endif
-
-#if canImport(CoreVideo)
-    @MainActor
-    private func handleSegmentationFailure(_ error: Error, label: String) async {
-        segmentationFailureCount += 1
-        let message = "Segmentation failed for \(label): \(error.localizedDescription)"
-        let currentFailureCount = segmentationFailureCount
-        let failureLimit = segmentationFailureLimit
-        let backoff = segmentationFailureBackoff
-
-        if currentFailureCount >= failureLimit {
-            segmentationDisabled = true
-            #if canImport(CoreImage)
-            segmentationMasks.removeAll()
-            #endif
-            await logger.log("🚫 \(message). Failure count: \(currentFailureCount)/\(failureLimit). Disabling segmentation for the remainder of the session.", level: .error, category: "DetectionKit.DetectionVM")
-            return
-        }
-        segmentationSuspendUntil = Date().addingTimeInterval(backoff)
-        await logger.log("⚠️ \(message). Failure count: \(currentFailureCount)/\(failureLimit). Pausing segmentation for \(Int(backoff))s.", level: .warning, category: "DetectionKit.DetectionVM")
-    }
-
-    private func promptRect(for boundingBox: NormalizedRect, pixelBuffer: CVPixelBuffer) -> CGRect {
-        let rect = clampNormalizedRect(boundingBox)
-        let x = CGFloat(rect.origin.x)
-        let y = CGFloat(rect.origin.y)
-        let w = CGFloat(rect.size.width)
-        let h = CGFloat(rect.size.height)
-        return CGRect(x: x, y: y, width: w, height: h)
-    }
-
-    private func clampNormalizedRect(_ rect: NormalizedRect) -> NormalizedRect {
-        let minX = max(0.0, min(1.0, rect.origin.x))
-        let minY = max(0.0, min(1.0, rect.origin.y))
-        let maxX = max(0.0, min(1.0, rect.origin.x + rect.size.width))
-        let maxY = max(0.0, min(1.0, rect.origin.y + rect.size.height))
-        let width = max(maxX - minX, 0.001)
-        let height = max(maxY - minY, 0.001)
-        return NormalizedRect(
-            origin: .init(x: minX, y: minY),
-            size: .init(width: width, height: height)
-        )
-    }
-
-    private func boundingBoxArea(_ rect: NormalizedRect) -> Double {
-        let clampedWidth = max(0, min(1, rect.size.width))
-        let clampedHeight = max(0, min(1, rect.size.height))
-        return clampedWidth * clampedHeight
-    }
-
-    private func trackIoU(_ a: NormalizedRect, _ b: NormalizedRect) -> Double {
-        let ax2 = a.origin.x + a.size.width
-        let ay2 = a.origin.y + a.size.height
-        let bx2 = b.origin.x + b.size.width
-        let by2 = b.origin.y + b.size.height
-        let ix = max(0, min(ax2, bx2) - max(a.origin.x, b.origin.x))
-        let iy = max(0, min(ay2, by2) - max(a.origin.y, b.origin.y))
-        let inter = ix * iy
-        let areaA = a.size.width * a.size.height
-        let areaB = b.size.width * b.size.height
-        let uni = max(areaA + areaB - inter, 1e-9)
-        return inter / uni
-    }
-
-    private func resetSegmentationStateForSuspend() {
-        // Cancel all in-flight segmentation tasks to prevent GPU work in background
-        let taskCount = inFlightSegmentationTasks.count
-        if taskCount > 0 {
-            Task { await logger.log("🛑 Cancelling \(taskCount) in-flight segmentation task(s) due to app suspend", level: .info, category: "DetectionKit.DetectionVM") }
-        }
-        for task in inFlightSegmentationTasks.values {
-            task.cancel()
-        }
-        inFlightSegmentationTasks.removeAll()
-
-        pendingSegmentationDetections.removeAll()
-        userRequestedSegmentationIDs.removeAll()
-        maskMetadata.removeAll()
-#if canImport(CoreImage)
-        segmentationMasks.removeAll()
-#endif
-        segmentationFailureCount = 0
-        segmentationSuspendUntil = nil
-        segmentationDisabled = false
-        segmentationPrepared = false
-        segmentationPrepareTask?.cancel()
-        segmentationPrepareTask = nil
-    }
-#endif
-
     private func finishInFlightRequest() {
         inFlightRequests = max(0, inFlightRequests - 1)
     }
@@ -649,12 +277,6 @@ public final class DetectionVM: ObservableObject {
 
         let expirationThreshold = timestamp.addingTimeInterval(-trackRetentionDuration)
         trackState = trackState.filter { $0.value.updatedAt >= expirationThreshold }
-
-        let activeIDs = Set(trackState.keys)
-        maskMetadata = maskMetadata.filter { activeIDs.contains($0.key) }
-#if canImport(CoreImage)
-        segmentationMasks = segmentationMasks.filter { activeIDs.contains($0.key) }
-#endif
 
         trackSnapshots = trackState.values.sorted(by: { $0.updatedAt > $1.updatedAt })
     }
@@ -682,13 +304,6 @@ public final class DetectionVM: ObservableObject {
         }
     }
 }
-
-#if canImport(SegmentationKit) && canImport(CoreVideo)
-private struct SegmentationMaskMetadata {
-    var lastBoundingBox: NormalizedRect
-    var lastRequest: Date
-}
-#endif
 
 // MARK: - Spatial Index for efficient track association
 
