@@ -59,9 +59,11 @@ struct CameraPreviewView: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            contextBadge
-                .padding(.top, 24)
-                .padding(.leading, 24)
+            if shouldShowContextBadge {
+                contextBadge
+                    .padding(.top, 24)
+                    .padding(.leading, 24)
+            }
         }
         .onAppear {
             viewModel.updateAppLifecycle(isActive: scenePhase == .active)
@@ -404,6 +406,9 @@ struct CameraPreviewView: View {
         return normalizedRect.rect(in: viewSize)
     }
 
+    private var shouldShowContextBadge: Bool {
+        gameViewModel.phase != .home
+    }
 }
 
 private struct RoundPlayLayer: View {
@@ -921,10 +926,11 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         Task { @MainActor [contextManager] in
             if contextManager.shouldClassifyScene {
                 await contextManager.classify(pixelBuffer)
+                return
             }
-        }
 
-        Task { @MainActor in
+            guard contextManager.isLocked else { return }
+
             viewModel.setInputSize(inputSize)
             viewModel.enqueue(request)
         }
@@ -1062,7 +1068,7 @@ final class ContextManager: ObservableObject {
     var contextDisplayName: String {
         switch state {
         case .unknown:
-            return "Detecting environment…"
+            return "Identifying context…"
         case .detecting:
             return "Identifying context…"
         case .locked(let value):
@@ -1072,6 +1078,11 @@ final class ContextManager: ObservableObject {
 
     var isDetecting: Bool {
         if case .detecting = state { return true }
+        return false
+    }
+
+    var isLocked: Bool {
+        if case .locked = state { return true }
         return false
     }
 
