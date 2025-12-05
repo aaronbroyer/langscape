@@ -65,13 +65,13 @@ public final class DetectionVM: ObservableObject {
     private var inFlightRequests = 0
     private var isAppActive = true
 
-    private init(
+    public init(
         service: any DetectionService,
-        throttleInterval: TimeInterval,
-        fpsWindow: TimeInterval,
-        logger: Logger,
-        errorStore: ErrorStore,
-        geminiAPIKey: String?
+        throttleInterval: TimeInterval = 0.06,
+        fpsWindow: TimeInterval = 1,
+        logger: Logger = .shared,
+        errorStore: ErrorStore = .shared,
+        geminiAPIKey: String? = nil
     ) {
         self.throttleInterval = throttleInterval
         self.logger = logger
@@ -81,24 +81,6 @@ public final class DetectionVM: ObservableObject {
         self.fpsWindow = fpsWindow
         self.errorStore = errorStore
         startAuxiliaryModelLoad(geminiAPIKey: geminiAPIKey)
-    }
-
-    public convenience init(
-        service: any DetectionService,
-        throttleInterval: TimeInterval = 0.06,
-        fpsWindow: TimeInterval = 1,
-        logger: Logger = .shared,
-        errorStore: ErrorStore = .shared,
-        geminiAPIKey: String? = nil
-    ) {
-        self.init(
-            service: service,
-            throttleInterval: throttleInterval,
-            fpsWindow: fpsWindow,
-            logger: logger,
-            errorStore: errorStore,
-            geminiAPIKey: geminiAPIKey
-        )
     }
 
     public func setInputSize(_ size: CGSize) {

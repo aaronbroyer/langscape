@@ -400,6 +400,8 @@ struct CameraPreviewView: View {
         return normalizedRect.rect(in: viewSize)
     }
 
+}
+
 private struct RoundPlayLayer: View {
     let round: Round
     let placedLabels: Set<GameKitLS.Label.ID>
