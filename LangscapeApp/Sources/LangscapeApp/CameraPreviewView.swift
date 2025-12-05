@@ -247,7 +247,7 @@ struct CameraPreviewView: View {
                 HStack(spacing: Spacing.small.cgFloat) {
                     ProgressView()
                         .progressViewStyle(.circular)
-                    Text("Locking onto objects…")
+                    Text("Scanning the room…")
                         .font(Typography.body.font)
                         .foregroundStyle(ColorPalette.primary.swiftUIColor)
                 }
@@ -255,6 +255,7 @@ struct CameraPreviewView: View {
             }
             .padding(.bottom, Spacing.xLarge.cgFloat * 1.2)
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .allowsHitTesting(false)
     }
 
@@ -331,6 +332,7 @@ struct CameraPreviewView: View {
     private func exitToHome() {
         showCompletionFlash = false
         gameViewModel.exitToHome()
+        contextManager.reset()
     }
 
     private func handlePhaseChange(_ phase: LabelScrambleVM.Phase) {
@@ -383,6 +385,7 @@ struct CameraPreviewView: View {
                 homeCardPressed = false
             }
         }
+        contextManager.enableClassification()
         gameViewModel.beginScanning()
     }
 
@@ -1037,6 +1040,7 @@ final class ContextManager: ObservableObject {
     }
 
     @Published private(set) var state: State = .unknown
+    private var classificationEnabled = false
 
     private let sceneClassifier: VLMDetector
     private var classifierPrepared = false
@@ -1050,6 +1054,7 @@ final class ContextManager: ObservableObject {
     }
 
     var shouldClassifyScene: Bool {
+        if !classificationEnabled { return false }
         if case .unknown = state { return true }
         return false
     }
@@ -1059,7 +1064,7 @@ final class ContextManager: ObservableObject {
         case .unknown:
             return "Detecting environment…"
         case .detecting:
-            return "Locking environment…"
+            return "Identifying context…"
         case .locked(let value):
             return "Context: \(value.capitalized)"
         }
@@ -1077,6 +1082,11 @@ final class ContextManager: ObservableObject {
 
     func reset() {
         state = .unknown
+        classificationEnabled = false
+    }
+
+    func enableClassification() {
+        classificationEnabled = true
     }
 
 #if canImport(CoreVideo)
