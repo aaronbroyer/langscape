@@ -418,7 +418,10 @@ private struct RoundPlayLayer: View {
     }
 
     private var frames: [DetectedObject.ID: CGRect] {
-        Dictionary(uniqueKeysWithValues: round.objects.map { ($0.id, frameProvider($0)) })
+        Dictionary(
+            round.objects.map { ($0.id, frameProvider($0)) },
+            uniquingKeysWith: { _, new in new }
+        )
     }
 
     var body: some View {
@@ -730,7 +733,10 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             return
         }
 
-        let snapshotLookup = Dictionary(uniqueKeysWithValues: trackSnapshots.map { ($0.id, $0) })
+        let snapshotLookup = Dictionary(
+            trackSnapshots.map { ($0.id, $0) },
+            uniquingKeysWith: { _, new in new }
+        )
         let placedObjects: [(id: UUID, label: String, box: DetectionRect)] = placedLabels.compactMap { labelID in
             guard let objectID = round.target(for: labelID),
                   let label = round.label(with: labelID)?.text ?? round.labels.first(where: { $0.objectID == objectID })?.text,
