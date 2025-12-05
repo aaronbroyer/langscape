@@ -278,6 +278,7 @@ struct CameraPreviewView: View {
             .scaleEffect(startPulse ? 1.08 : 1)
             .padding(.bottom, Spacing.xLarge.cgFloat * 1.6)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .onAppear { startPulseAnimation() }
         .onDisappear { startPulse = false }
     }
