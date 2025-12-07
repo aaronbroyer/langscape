@@ -1,5 +1,0 @@
-chair
-table
-laptop
-refrigerator
-television
