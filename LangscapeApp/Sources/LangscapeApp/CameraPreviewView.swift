@@ -432,6 +432,13 @@ private struct RoundPlayLayer: View {
         )
     }
 
+    private var placedLabelOverlays: [(label: GameKitLS.Label, frame: CGRect)] {
+        round.labels.compactMap { label in
+            guard placedLabels.contains(label.id), let frame = frames[label.objectID] else { return nil }
+            return (label, frame)
+        }
+    }
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             if showTargets {
@@ -445,6 +452,13 @@ private struct RoundPlayLayer: View {
                     }
                 }
             }
+
+            ForEach(placedLabelOverlays, id: \.label.id) { entry in
+                StickyLabelOverlay(text: entry.label.text, frame: entry.frame)
+                    .allowsHitTesting(false)
+                    .transition(.scale.combined(with: .opacity))
+            }
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: placedLabels)
 
             VStack {
                 Spacer()
@@ -521,6 +535,26 @@ private struct RoundPlayLayer: View {
     private func expand(frame: CGRect) -> CGRect {
         let inset = max(28, min(frame.width, frame.height) * 0.3)
         return frame.insetBy(dx: -inset, dy: -inset)
+    }
+}
+
+private struct StickyLabelOverlay: View {
+    let text: String
+    let frame: CGRect
+
+    var body: some View {
+        Text(text)
+            .font(Typography.caption.font.weight(.semibold))
+            .foregroundStyle(ColorPalette.primary.swiftUIColor)
+            .padding(.horizontal, Spacing.medium.cgFloat)
+            .padding(.vertical, Spacing.xSmall.cgFloat)
+            .background(ColorPalette.surface.swiftUIColor.opacity(0.9), in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.35), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.28), radius: 10, x: 0, y: 6)
+            .position(x: frame.midX, y: frame.midY)
     }
 }
 
