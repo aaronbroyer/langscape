@@ -47,6 +47,7 @@ struct CameraPreviewView: View {
             .coordinateSpace(name: "experience")
             .background(Color.black)
             .onChange(of: viewModel.detections) { _, newDetections in
+                guard gameViewModel.phase == .scanning else { return }
                 gameViewModel.ingestDetections(newDetections)
             }
             .onChange(of: gameViewModel.phase) { _, newPhase in
@@ -711,7 +712,6 @@ private struct ARCameraView: UIViewRepresentable {
             phase: gameViewModel.phase,
             round: gameViewModel.round,
             placedLabels: gameViewModel.placedLabels,
-            trackSnapshots: viewModel.trackSnapshots,
             inputImageSize: viewModel.inputImageSize
         )
     }
@@ -779,7 +779,6 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         phase: LabelScrambleVM.Phase,
         round: Round?,
         placedLabels: Set<GameKitLS.Label.ID>,
-        trackSnapshots: [DetectionTrackSnapshot],
         inputImageSize: CGSize?
     ) {
         updateTrackingTargets(phase: phase, round: round)
@@ -792,15 +791,11 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             return
         }
 
-        let snapshotLookup = Dictionary(
-            trackSnapshots.map { ($0.id, $0) },
-            uniquingKeysWith: { _, new in new }
-        )
         let placedObjects: [(id: UUID, label: String, box: DetectionRect)] = placedLabels.compactMap { labelID in
             guard let objectID = round.target(for: labelID),
                   let label = round.label(with: labelID)?.text ?? round.labels.first(where: { $0.objectID == objectID })?.text,
-                  let snapshot = snapshotLookup[objectID] else { return nil }
-            return (objectID, label, snapshot.boundingBox)
+                  let object = round.object(with: objectID) else { return nil }
+            return (objectID, label, object.boundingBox)
         }
 
         guard !placedObjects.isEmpty else {
@@ -846,7 +841,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         #if canImport(Vision) && canImport(ImageIO)
         let shouldTrack: Bool
         switch phase {
-        case .playing, .paused:
+        case .ready, .playing, .paused:
             shouldTrack = true
         default:
             shouldTrack = false
@@ -1072,23 +1067,26 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
 
-            let state = await MainActor.run { () -> (shouldClassify: Bool, isLocked: Bool, interfaceOrientationRawValue: Int) in
+            let state = await MainActor.run { () -> (shouldClassify: Bool, isLocked: Bool, shouldDetect: Bool, shouldMaintainTargets: Bool, interfaceOrientationRawValue: Int) in
                 #if canImport(UIKit)
                 let orientationRawValue = self.arView?.window?.windowScene?.interfaceOrientation.rawValue ?? UIInterfaceOrientation.portrait.rawValue
                 #else
                 let orientationRawValue = 0
                 #endif
-                return (self.contextManager.shouldClassifyScene, self.contextManager.isLocked, orientationRawValue)
+                let shouldDetect = self.gameViewModel.phase == .scanning
+                let shouldMaintainTargets: Bool
+                switch self.gameViewModel.phase {
+                case .ready, .playing, .paused:
+                    shouldMaintainTargets = true
+                default:
+                    shouldMaintainTargets = false
+                }
+                return (self.contextManager.shouldClassifyScene, self.contextManager.isLocked, shouldDetect, shouldMaintainTargets, orientationRawValue)
             }
-            guard state.shouldClassify || state.isLocked else { return }
+            guard state.shouldClassify || (state.isLocked && (state.shouldDetect || state.shouldMaintainTargets)) else { return }
 
-            guard let pixelBuffer = clonePixelBuffer(capturedImage) else {
-                await logger.log("Camera pipeline dropped a frame because the pixel buffer could not be cloned.", level: .warning, category: "LangscapeApp.Camera")
-                return
-            }
-
-            let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
-            let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+            let width = CGFloat(CVPixelBufferGetWidth(capturedImage))
+            let height = CGFloat(CVPixelBufferGetHeight(capturedImage))
             let inputSize = CGSize(width: width, height: height)
             #if canImport(UIKit) && canImport(ImageIO)
             let interfaceOrientation = UIInterfaceOrientation(rawValue: state.interfaceOrientationRawValue) ?? .portrait
@@ -1099,17 +1097,32 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             let orientationRaw: UInt32? = nil
             let orientedInputSize = inputSize
             #endif
-            let request = DetectionRequest(pixelBuffer: pixelBuffer, imageOrientationRaw: orientationRaw)
+
+            await MainActor.run {
+                if viewModel.inputImageSize != orientedInputSize {
+                    viewModel.setInputSize(orientedInputSize)
+                }
+            }
 
             if state.shouldClassify {
+                guard let pixelBuffer = clonePixelBuffer(capturedImage) else {
+                    await logger.log("Camera pipeline dropped a frame because the pixel buffer could not be cloned.", level: .warning, category: "LangscapeApp.Camera")
+                    return
+                }
                 await contextManager.classify(pixelBuffer)
                 return
             }
 
-            guard state.isLocked else { return }
+            guard state.isLocked, state.shouldDetect else { return }
+
+            guard let pixelBuffer = clonePixelBuffer(capturedImage) else {
+                await logger.log("Camera pipeline dropped a frame because the pixel buffer could not be cloned.", level: .warning, category: "LangscapeApp.Camera")
+                return
+            }
+
+            let request = DetectionRequest(pixelBuffer: pixelBuffer, imageOrientationRaw: orientationRaw)
 
             await MainActor.run {
-                viewModel.setInputSize(orientedInputSize)
                 viewModel.enqueue(request)
             }
         }
