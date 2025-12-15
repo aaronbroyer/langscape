@@ -59,7 +59,7 @@ public final class DetectionVM: ObservableObject {
     private var auxiliaryLoadTask: Task<Void, Never>?
     private var trackState: [UUID: DetectionTrackSnapshot] = [:]
     private let trackRetentionDuration: TimeInterval = 2.5
-    private let activeInFlightLimit = 2
+    private let activeInFlightLimit = 1
     private let suspendedInFlightLimit = 0
     private var maxInFlightRequests: Int { isAppActive ? activeInFlightLimit : suspendedInFlightLimit }
     private var inFlightRequests = 0
@@ -358,7 +358,7 @@ private actor DetectionProcessor {
     // Tracking parameters (AGGRESSIVE: emit almost everything immediately)
     private let iouThreshold: Double = 0.30  // Very loose for crowded scenes
     private let maxTrackAge: TimeInterval = 1.0  // Keep tracks longer
-    private let smoothingAlpha: Double = 0.5  // Moderate smoothing - balance stability with responsiveness
+    private let smoothingAlpha: Double = 0.85  // Keep overlays responsive; reduce bbox trailing during motion
     private let maxActiveTracks: Int = 10000  // Very high cap
 
     // Confidence-based hit requirements (AGGRESSIVE: emit immediately)
@@ -389,9 +389,13 @@ private actor DetectionProcessor {
             prepareTask = nil  // Clear task after completion
         }
         let raw = try await service.detect(on: request)
+        #if DEBUG
         print("DetectionProcessor: Got \(raw.count) raw detections from service")
+        #endif
         let stabilized = stabilize(detections: raw, timestamp: request.timestamp)
+        #if DEBUG
         print("DetectionProcessor: After stabilize: \(stabilized.count) detections")
+        #endif
         return stabilized
     }
 
@@ -407,7 +411,9 @@ private actor DetectionProcessor {
     }
 
     private func stabilize(detections: [Detection], timestamp: Date) -> [Detection] {
+        #if DEBUG
         print("DetectionProcessor.stabilize: Input \(detections.count) detections, \(tracks.count) existing tracks")
+        #endif
 
         // Step 1: Rebuild spatial index with current tracks
         spatialIndex.clear()
@@ -444,7 +450,8 @@ private actor DetectionProcessor {
 
             if let id = bestID, var tr = tracks[id] {
                 // EMA update for bbox and confidence
-                tr.bbox = emaBBox(old: tr.bbox, new: det.boundingBox, alpha: smoothingAlpha)
+                let alpha = adaptiveAlpha(base: smoothingAlpha, iou: bestIoU)
+                tr.bbox = emaBBox(old: tr.bbox, new: det.boundingBox, alpha: alpha)
                 tr.confidence = tr.confidence * (1 - smoothingAlpha) + det.confidence * smoothingAlpha
                 tr.hits += 1
                 tr.lastTimestamp = timestamp
@@ -494,14 +501,18 @@ private actor DetectionProcessor {
             let requiredHits = getRequiredHits(confidence: tr.confidence)
             let meetsHits = tr.hits >= requiredHits
             let meetsAge = timestamp.timeIntervalSince(tr.lastTimestamp) <= maxTrackAge
+            #if DEBUG
             if !meetsHits || !meetsAge {
                 print("DetectionProcessor.stabilize: Filtering track \(tr.label) - hits:\(tr.hits) >= \(requiredHits) = \(meetsHits), age:\(timestamp.timeIntervalSince(tr.lastTimestamp)) <= \(maxTrackAge) = \(meetsAge)")
             }
+            #endif
             return meetsHits && meetsAge
         }
         .sorted(by: { $0.confidence > $1.confidence })
 
+        #if DEBUG
         print("DetectionProcessor.stabilize: Emitting \(stable.count) stable tracks out of \(tracks.count) total tracks")
+        #endif
 
         return stable.map { tr in
             Detection(id: tr.id, label: tr.label, confidence: tr.confidence, boundingBox: tr.bbox)
@@ -527,6 +538,11 @@ private actor DetectionProcessor {
         }
 
         return scores.max(by: { $0.value < $1.value })?.key ?? history.last!.label
+    }
+
+    private func adaptiveAlpha(base: Double, iou: Double) -> Double {
+        let clamped = max(0.0, min(1.0, iou))
+        return base + (1 - base) * (1 - clamped)
     }
 
     /// Get required hits based on confidence (AGGRESSIVE: always 1 hit)

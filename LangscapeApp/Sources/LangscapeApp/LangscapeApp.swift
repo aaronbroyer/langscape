@@ -19,7 +19,7 @@ struct LangscapeAppMain: App {
         let service = CombinedDetector(geminiAPIKey: Secrets.geminiAPIKey)
         let detectionVM = DetectionVM(
             service: service,
-            throttleInterval: 0.12,
+            throttleInterval: 0.08,
             geminiAPIKey: Secrets.geminiAPIKey
         )
         _detectionViewModel = StateObject(wrappedValue: detectionVM)

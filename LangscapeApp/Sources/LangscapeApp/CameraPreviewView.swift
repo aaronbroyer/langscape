@@ -13,6 +13,9 @@ import UIKit
 #if canImport(ImageIO)
 import ImageIO
 #endif
+#if canImport(Vision)
+import Vision
+#endif
 private typealias DetectionRect = DetectionKit.NormalizedRect
 
 struct CameraPreviewView: View {
@@ -692,7 +695,7 @@ private struct ARCameraView: UIViewRepresentable {
     let contextManager: ContextManager
 
     func makeCoordinator() -> ARSessionCoordinator {
-        ARSessionCoordinator(viewModel: viewModel, contextManager: contextManager)
+        ARSessionCoordinator(viewModel: viewModel, gameViewModel: gameViewModel, contextManager: contextManager)
     }
 
     func makeUIView(context: Context) -> ARView {
@@ -721,14 +724,27 @@ private struct ARCameraView: UIViewRepresentable {
 
 private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
     private let viewModel: DetectionVM
+    private let gameViewModel: LabelScrambleVM
     private let contextManager: ContextManager
     private weak var arView: ARView?
     private var lastFrameTime: TimeInterval = 0
+    private let captureInterval: TimeInterval = 0.08
     private let logger = Logger.shared
     private var labelAnchors: [UUID: LabelAnchor] = [:]
 
-    init(viewModel: DetectionVM, contextManager: ContextManager) {
+    #if canImport(Vision) && canImport(ImageIO)
+    private let trackingQueue = DispatchQueue(label: "LangscapeApp.TargetTracking", qos: .userInitiated)
+    private let trackingHandler = VNSequenceRequestHandler()
+    private let trackingSemaphore = DispatchSemaphore(value: 1)
+    private var trackedTargets: [UUID: TrackedTarget] = [:]
+    private var trackingExifOrientation: CGImagePropertyOrientation = .right
+    private var lastTrackingTimestamp: TimeInterval = 0
+    private let trackingInterval: TimeInterval = 1.0 / 30.0
+    #endif
+
+    init(viewModel: DetectionVM, gameViewModel: LabelScrambleVM, contextManager: ContextManager) {
         self.viewModel = viewModel
+        self.gameViewModel = gameViewModel
         self.contextManager = contextManager
     }
 
@@ -766,6 +782,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         trackSnapshots: [DetectionTrackSnapshot],
         inputImageSize: CGSize?
     ) {
+        updateTrackingTargets(phase: phase, round: round)
         guard shouldRenderLabels(for: phase), let round else {
             clearAnchors(from: arView)
             return
@@ -822,6 +839,111 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         default:
             return false
         }
+    }
+
+    @MainActor
+    private func updateTrackingTargets(phase: LabelScrambleVM.Phase, round: Round?) {
+        #if canImport(Vision) && canImport(ImageIO)
+        let shouldTrack: Bool
+        switch phase {
+        case .playing, .paused:
+            shouldTrack = true
+        default:
+            shouldTrack = false
+        }
+
+        let targets = shouldTrack ? (round?.objects ?? []) : []
+        #if canImport(UIKit)
+        let interfaceOrientation = arView?.window?.windowScene?.interfaceOrientation ?? .portrait
+        let exifOrientation = exifOrientationForBackCamera(interfaceOrientation)
+        #else
+        let exifOrientation: CGImagePropertyOrientation = .right
+        #endif
+
+        trackingQueue.async { [weak self] in
+            guard let self else { return }
+            self.trackingExifOrientation = exifOrientation
+
+            guard shouldTrack else {
+                self.trackedTargets.removeAll()
+                return
+            }
+
+            let ids = Set(targets.map(\.id))
+            if ids == Set(self.trackedTargets.keys) {
+                return
+            }
+
+            var next: [UUID: TrackedTarget] = [:]
+            next.reserveCapacity(targets.count)
+            for object in targets {
+                let observation = VNDetectedObjectObservation(boundingBox: toVisionBoundingBox(object.boundingBox))
+                next[object.id] = TrackedTarget(label: object.sourceLabel, confidence: object.confidence, observation: observation)
+            }
+            self.trackedTargets = next
+        }
+        #endif
+    }
+
+    private func trackTargetsIfNeeded(_ frame: ARFrame) {
+        #if canImport(Vision) && canImport(ImageIO)
+        let now = frame.timestamp
+        guard now - lastTrackingTimestamp >= trackingInterval else { return }
+        lastTrackingTimestamp = now
+
+        let semaphore = trackingSemaphore
+        guard semaphore.wait(timeout: .now()) == .success else { return }
+
+        let pixelBuffer = frame.capturedImage
+        let gameViewModel = gameViewModel
+        trackingQueue.async { [weak self] in
+            defer { semaphore.signal() }
+            guard let self else { return }
+            guard !self.trackedTargets.isEmpty else { return }
+
+            let snapshot = self.trackedTargets
+            var ids: [UUID] = []
+            var requests: [VNTrackObjectRequest] = []
+            ids.reserveCapacity(snapshot.count)
+            requests.reserveCapacity(snapshot.count)
+
+            for (id, target) in snapshot {
+                ids.append(id)
+                let request = VNTrackObjectRequest(detectedObjectObservation: target.observation)
+                request.trackingLevel = .fast
+                requests.append(request)
+            }
+
+            do {
+                try self.trackingHandler.perform(requests, on: pixelBuffer, orientation: self.trackingExifOrientation)
+            } catch {
+                return
+            }
+
+            var updates: [Detection] = []
+            updates.reserveCapacity(requests.count)
+            for (index, id) in ids.enumerated() {
+                guard let obs = requests[index].results?.first as? VNDetectedObjectObservation else { continue }
+                guard obs.confidence >= 0.15 else { continue }
+                guard var target = self.trackedTargets[id] else { continue }
+                target.observation = obs
+                self.trackedTargets[id] = target
+                updates.append(
+                    Detection(
+                        id: id,
+                        label: target.label,
+                        confidence: target.confidence,
+                        boundingBox: fromVisionBoundingBox(obs.boundingBox)
+                    )
+                )
+            }
+
+            guard !updates.isEmpty else { return }
+            Task { @MainActor in
+                gameViewModel.ingestDetections(updates)
+            }
+        }
+        #endif
     }
 
     private func raycast(at point: CGPoint, in arView: ARView) -> ARRaycastResult? {
@@ -939,34 +1061,57 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        let now = Date().timeIntervalSince1970
-        guard now - lastFrameTime >= 0.25 else { return }
+        trackTargetsIfNeeded(frame)
+
+        let now = frame.timestamp
+        guard now - lastFrameTime >= captureInterval else { return }
         lastFrameTime = now
 
-        guard let pixelBuffer = clonePixelBuffer(frame.capturedImage) else {
-            Task { await logger.log("Camera pipeline dropped a frame because the pixel buffer could not be cloned.", level: .warning, category: "LangscapeApp.Camera") }
-            return
-        }
-        #if canImport(ImageIO)
-        let orientationRaw = CGImagePropertyOrientation.right.rawValue
-        #else
-        let orientationRaw: UInt32? = nil
-        #endif
-        let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
-        let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-        let inputSize = CGSize(width: width, height: height)
-        let request = DetectionRequest(pixelBuffer: pixelBuffer, imageOrientationRaw: orientationRaw)
+        let capturedImage = frame.capturedImage
+        let logger = logger
+        Task(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
 
-        Task { @MainActor [contextManager] in
-            if contextManager.shouldClassifyScene {
+            let state = await MainActor.run { () -> (shouldClassify: Bool, isLocked: Bool, interfaceOrientationRawValue: Int) in
+                #if canImport(UIKit)
+                let orientationRawValue = self.arView?.window?.windowScene?.interfaceOrientation.rawValue ?? UIInterfaceOrientation.portrait.rawValue
+                #else
+                let orientationRawValue = 0
+                #endif
+                return (self.contextManager.shouldClassifyScene, self.contextManager.isLocked, orientationRawValue)
+            }
+            guard state.shouldClassify || state.isLocked else { return }
+
+            guard let pixelBuffer = clonePixelBuffer(capturedImage) else {
+                await logger.log("Camera pipeline dropped a frame because the pixel buffer could not be cloned.", level: .warning, category: "LangscapeApp.Camera")
+                return
+            }
+
+            let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+            let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+            let inputSize = CGSize(width: width, height: height)
+            #if canImport(UIKit) && canImport(ImageIO)
+            let interfaceOrientation = UIInterfaceOrientation(rawValue: state.interfaceOrientationRawValue) ?? .portrait
+            let exifOrientation = exifOrientationForBackCamera(interfaceOrientation)
+            let orientationRaw = exifOrientation.rawValue
+            let orientedInputSize = orientedSize(inputSize, for: exifOrientation)
+            #else
+            let orientationRaw: UInt32? = nil
+            let orientedInputSize = inputSize
+            #endif
+            let request = DetectionRequest(pixelBuffer: pixelBuffer, imageOrientationRaw: orientationRaw)
+
+            if state.shouldClassify {
                 await contextManager.classify(pixelBuffer)
                 return
             }
 
-            guard contextManager.isLocked else { return }
+            guard state.isLocked else { return }
 
-            viewModel.setInputSize(inputSize)
-            viewModel.enqueue(request)
+            await MainActor.run {
+                viewModel.setInputSize(orientedInputSize)
+                viewModel.enqueue(request)
+            }
         }
     }
 
@@ -987,6 +1132,41 @@ private struct LabelAnchor {
     let anchor: AnchorEntity
     let card: ModelEntity
 }
+
+#if canImport(Vision) && canImport(ImageIO)
+private struct TrackedTarget {
+    var label: String
+    var confidence: Double
+    var observation: VNDetectedObjectObservation
+}
+
+private func clamp01(_ value: Double) -> Double {
+    max(0.0, min(1.0, value))
+}
+
+private func toVisionBoundingBox(_ rect: DetectionRect) -> CGRect {
+    let x = clamp01(rect.origin.x)
+    let yTop = clamp01(rect.origin.y)
+    let w = max(0.0, min(1.0 - x, rect.size.width))
+    let h = max(0.0, min(1.0 - yTop, rect.size.height))
+    let yBottom = 1.0 - yTop - h
+    let clampedYBottom = clamp01(yBottom)
+    let clampedH = max(0.0, min(1.0 - clampedYBottom, h))
+    return CGRect(x: x, y: clampedYBottom, width: w, height: clampedH)
+}
+
+private func fromVisionBoundingBox(_ rect: CGRect) -> DetectionRect {
+    let x = clamp01(Double(rect.origin.x))
+    let yBottom = clamp01(Double(rect.origin.y))
+    let w = max(0.0, min(1.0 - x, Double(rect.size.width)))
+    let h = max(0.0, min(1.0 - yBottom, Double(rect.size.height)))
+    let yTop = 1.0 - yBottom - h
+    return DetectionRect(
+        origin: .init(x: x, y: clamp01(yTop)),
+        size: .init(width: w, height: h)
+    )
+}
+#endif
 
 private func projectedRect(
     for normalizedRect: DetectionRect,
@@ -1070,6 +1250,32 @@ fileprivate extension simd_float4x4 {
         SIMD3<Float>(columns.3.x, columns.3.y, columns.3.z)
     }
 }
+
+#if canImport(UIKit) && canImport(ImageIO)
+private func exifOrientationForBackCamera(_ interfaceOrientation: UIInterfaceOrientation) -> CGImagePropertyOrientation {
+    switch interfaceOrientation {
+    case .portrait:
+        return .right
+    case .portraitUpsideDown:
+        return .left
+    case .landscapeLeft:
+        return .up
+    case .landscapeRight:
+        return .down
+    default:
+        return .right
+    }
+}
+
+private func orientedSize(_ size: CGSize, for orientation: CGImagePropertyOrientation) -> CGSize {
+    switch orientation {
+    case .left, .leftMirrored, .right, .rightMirrored:
+        return CGSize(width: size.height, height: size.width)
+    default:
+        return size
+    }
+}
+#endif
 
 @MainActor
 final class ContextManager: ObservableObject {
