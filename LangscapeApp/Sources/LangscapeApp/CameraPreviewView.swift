@@ -873,7 +873,9 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             next.reserveCapacity(targets.count)
             for object in targets {
                 let observation = VNDetectedObjectObservation(boundingBox: toVisionBoundingBox(object.boundingBox))
-                next[object.id] = TrackedTarget(label: object.sourceLabel, confidence: object.confidence, observation: observation)
+                let request = VNTrackObjectRequest(detectedObjectObservation: observation)
+                request.trackingLevel = .fast
+                next[object.id] = TrackedTarget(label: object.sourceLabel, confidence: object.confidence, request: request)
             }
             self.trackedTargets = next
         }
@@ -904,9 +906,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
 
             for (id, target) in snapshot {
                 ids.append(id)
-                let request = VNTrackObjectRequest(detectedObjectObservation: target.observation)
-                request.trackingLevel = .fast
-                requests.append(request)
+                requests.append(target.request)
             }
 
             do {
@@ -918,11 +918,10 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             var updates: [Detection] = []
             updates.reserveCapacity(requests.count)
             for (index, id) in ids.enumerated() {
-                guard let obs = requests[index].results?.first as? VNDetectedObjectObservation else { continue }
-                guard obs.confidence >= 0.15 else { continue }
-                guard var target = self.trackedTargets[id] else { continue }
-                target.observation = obs
-                self.trackedTargets[id] = target
+                let request = requests[index]
+                guard let obs = request.results?.first as? VNDetectedObjectObservation else { continue }
+                request.inputObservation = obs
+                guard let target = self.trackedTargets[id] else { continue }
                 updates.append(
                     Detection(
                         id: id,
@@ -1151,7 +1150,7 @@ private struct LabelAnchor {
 private struct TrackedTarget {
     var label: String
     var confidence: Double
-    var observation: VNDetectedObjectObservation
+    var request: VNTrackObjectRequest
 }
 
 private func clamp01(_ value: Double) -> Double {
