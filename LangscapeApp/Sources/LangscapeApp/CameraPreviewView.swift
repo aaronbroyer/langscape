@@ -1081,6 +1081,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
                 default:
                     shouldMaintainTargets = false
                 }
+                self.updateTrackingTargets(phase: self.gameViewModel.phase, round: self.gameViewModel.round)
                 return (self.contextManager.shouldClassifyScene, self.contextManager.isLocked, shouldDetect, shouldMaintainTargets, orientationRawValue)
             }
             guard state.shouldClassify || (state.isLocked && (state.shouldDetect || state.shouldMaintainTargets)) else { return }
