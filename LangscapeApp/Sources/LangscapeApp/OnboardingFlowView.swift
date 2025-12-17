@@ -266,7 +266,7 @@ private struct OnboardingCameraPermissionScreen: View {
                     .font(.system(size: 34, weight: .medium, design: .rounded))
                     .multilineTextAlignment(.center)
 
-                    Text("We use your camera to label real-world objects.\nNo photos are stored.")
+                    Text("We use your camera to interact with real-world objects.\nNo photos are stored.")
                         .font(.system(size: 16, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.white.opacity(0.62))
                         .multilineTextAlignment(.center)
