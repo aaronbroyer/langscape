@@ -25,11 +25,9 @@ public actor CombinedDetector: DetectionService {
         self.filter = DetectionFilter()
 
         // VLM Referee: VERIFICATION ONLY (not proposal generation)
-        // Verifies uncertain YOLO detections (confidence 0.15-0.70)
-        // acceptGate 0.75 for reliable verification
-        // Higher gate prevents false positives from corrupted embeddings
+        // Used to keep only detections the VLM agrees with strongly (better gameplay precision).
         do {
-            let r = try VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.75, minKeepGate: 0.50, maxProposals: 64, geminiAPIKey: geminiAPIKey)
+            let r = try VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.80, minKeepGate: 0.70, maxProposals: 64, geminiAPIKey: geminiAPIKey)
             self.referee = r
             self.refereeReady = true
         } catch {
@@ -130,38 +128,36 @@ public actor CombinedDetector: DetectionService {
 
         // Phase 2: Filter and Bucket YOLO detections
         let filtered = filter.filter(yoloDetections)
-        let autoAcceptCount = filtered.autoAccept.count
-        let needsVerifyCount = filtered.needsVerification.count
-        await logger.log("CombinedDetector: Filtered YOLO - Auto-accept: \(autoAcceptCount) (high conf), Needs verify: \(needsVerifyCount) (mid/low conf)", level: .info, category: "DetectionKit.CombinedDetector")
+        let candidates = filtered.all
+        let candidatesForVerification = candidates
+            .sorted(by: { qualityScore($0) > qualityScore($1) })
+            .prefix(16)
+        let needsVerifyCount = candidatesForVerification.count
+        await logger.log("CombinedDetector: Candidate detections after filter: \(candidates.count) (verifying \(needsVerifyCount))", level: .info, category: "DetectionKit.CombinedDetector")
 
         var results: [Detection] = []
-        results.reserveCapacity(yoloDetections.count)
-
-        // Auto-accept high-confidence YOLO detections (>0.60)
-        results.append(contentsOf: filtered.autoAccept)
+        results.reserveCapacity(needsVerifyCount)
 
         // Phase 3: VLM Referee Verification (for uncertain detections only)
-        if refereeReady, let referee = referee, !filtered.needsVerification.isEmpty {
+        if refereeReady, let referee = referee, !candidatesForVerification.isEmpty {
             #if canImport(CoreVideo)
-            if let pixelBuffer = request.pixelBuffer as? CVPixelBuffer {
-                await logger.log("CombinedDetector: Verifying \(filtered.needsVerification.count) uncertain YOLO detections with VLM Referee", level: .info, category: "DetectionKit.CombinedDetector")
-                let verified = referee.filterBatch(
-                    filtered.needsVerification,
-                    pixelBuffer: pixelBuffer,
-                    orientationRaw: request.imageOrientationRaw,
-                    minConf: 0.15,
-                    maxConf: 0.70,  // Only verify mid/low confidence
-                    maxVerify: 200,  // Limit verification workload
-                    earlyStopThreshold: 1000  // Stop when enough verified
-                )
-                results.append(contentsOf: verified)
-                let verifiedCount = verified.count
-                await logger.log("CombinedDetector: VLM Referee verified \(verifiedCount)/\(filtered.needsVerification.count) detections", level: .info, category: "DetectionKit.CombinedDetector")
-            }
+            let pixelBuffer: CVPixelBuffer = request.pixelBuffer
+            await logger.log("CombinedDetector: Verifying \(candidatesForVerification.count) YOLO detections with VLM Referee", level: .info, category: "DetectionKit.CombinedDetector")
+            let verified = referee.filterBatch(
+                Array(candidatesForVerification),
+                pixelBuffer: pixelBuffer,
+                orientationRaw: request.imageOrientationRaw,
+                minConf: 0.15,
+                maxConf: 1.00,  // Verify high-confidence boxes too
+                maxVerify: 200,  // Limit verification workload
+                earlyStopThreshold: 1000  // Stop when enough verified
+            )
+            results.append(contentsOf: verified)
+            await logger.log("CombinedDetector: VLM Referee kept \(verified.count)/\(candidatesForVerification.count) detections after verification", level: .info, category: "DetectionKit.CombinedDetector")
             #endif
         } else {
             // No referee available - accept mid-confidence detections without verification
-            let midConfDetections = filtered.needsVerification.filter { $0.confidence >= 0.40 }
+            let midConfDetections = candidatesForVerification.filter { $0.confidence >= 0.40 }
             results.append(contentsOf: midConfDetections)
             await logger.log("CombinedDetector: No VLM Referee - accepting \(midConfDetections.count) mid-confidence detections (≥0.40) without verification", level: .warning, category: "DetectionKit.CombinedDetector")
         }
@@ -169,10 +165,12 @@ public actor CombinedDetector: DetectionService {
         // Phase 4: Final NMS and sorting
         let beforeNMS = results.count
         results = nms(results, iou: 0.50)  // Standard NMS threshold
+        let afterNMS = results.count
         results.sort { $0.confidence > $1.confidence }
+        results = dedupeByLabel(results)
 
         let finalCount = results.count
-        await logger.log("CombinedDetector: Pipeline complete - Before NMS: \(beforeNMS), After NMS: \(finalCount)", level: .info, category: "DetectionKit.CombinedDetector")
+        await logger.log("CombinedDetector: Pipeline complete - Before NMS: \(beforeNMS), After NMS: \(afterNMS), After label dedupe: \(finalCount)", level: .info, category: "DetectionKit.CombinedDetector")
 
         // Log top detections for debugging
         if !results.isEmpty {
@@ -210,5 +208,23 @@ public actor CombinedDetector: DetectionService {
         let areaB = b.size.width * b.size.height
         let uni = max(areaA + areaB - inter, 1e-9)
         return inter / uni
+    }
+
+    private func qualityScore(_ detection: Detection) -> Double {
+        let area = max(0.0, detection.boundingBox.size.width * detection.boundingBox.size.height)
+        return detection.confidence * sqrt(area)
+    }
+
+    private func dedupeByLabel(_ detections: [Detection]) -> [Detection] {
+        var seen: Set<String> = []
+        var out: [Detection] = []
+        out.reserveCapacity(detections.count)
+        for det in detections {
+            let key = det.label.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            out.append(det)
+        }
+        return out
     }
 }
