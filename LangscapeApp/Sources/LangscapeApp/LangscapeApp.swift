@@ -62,6 +62,7 @@ private struct AppFlowView: View {
                 transitionToExperience()
             }
             .navigationBarBackButtonHidden(true)
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .experience:
@@ -92,7 +93,7 @@ private struct AppFlowView: View {
         // In Debug builds always start at onboarding to facilitate testing.
         settings.reset()
         path.removeAll()
-        onboardingViewModel.step = .splash
+        onboardingViewModel.resetFlow()
         return
         #else
         if settings.hasCompletedOnboarding {

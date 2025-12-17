@@ -21,25 +21,36 @@ final class OnboardingViewModelTests: XCTestCase {
         super.tearDown()
     }
 
-    func testAdvanceFromSplashMovesToSlides() {
+    func testAdvanceFromSplashMovesToHero() {
         let viewModel = OnboardingViewModel(settings: settings)
         viewModel.advanceFromSplash()
-        XCTAssertEqual(viewModel.step, .slides)
+        XCTAssertEqual(viewModel.step, .hero)
     }
 
-    func testShowLanguageSelectionAfterSlides() {
+    func testGetStartedFromHeroMovesToLanguageSelection() {
         let viewModel = OnboardingViewModel(settings: settings)
         viewModel.advanceFromSplash()
-        viewModel.showLanguageSelection()
+        viewModel.getStartedFromHero()
         XCTAssertEqual(viewModel.step, .languageSelection)
     }
 
-    func testSelectLanguagePersistsPreference() {
+    func testContinueFromLanguageSelectionPersistsPreference() {
         let viewModel = OnboardingViewModel(settings: settings)
         viewModel.advanceFromSplash()
-        viewModel.showLanguageSelection()
-        viewModel.selectLanguage(.spanishToEnglish)
+        viewModel.getStartedFromHero()
+        viewModel.setTargetLanguage(.english)
+        viewModel.continueFromLanguageSelection()
         XCTAssertEqual(settings.selectedLanguage, .spanishToEnglish)
+        XCTAssertEqual(viewModel.step, .cameraPermission)
+    }
+
+    func testSkipLanguageSelectionDoesNotPersistChanges() {
+        let viewModel = OnboardingViewModel(settings: settings)
+        viewModel.advanceFromSplash()
+        viewModel.getStartedFromHero()
+        viewModel.setTargetLanguage(.english)
+        viewModel.skipLanguageSelection()
+        XCTAssertEqual(settings.selectedLanguage, .englishToSpanish)
         XCTAssertEqual(viewModel.step, .cameraPermission)
     }
 
