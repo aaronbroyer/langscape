@@ -248,30 +248,30 @@ private struct OnboardingCameraPermissionScreen: View {
                 Spacer()
 
                 VStack(spacing: 18) {
-                    OnboardingCameraIcon()
-
-                    VStack(spacing: 12) {
-                        Text("Turn your camera\ninto a")
-                            .font(.system(size: 34, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.92))
-
-                        Text("language lens")
-                            .font(.system(size: 34, weight: .medium, design: .rounded))
-                            .foregroundStyle(OnboardingVisuals.accent)
-                    }
-                    .multilineTextAlignment(.center)
+                    LangscapeLogo(style: .mark, glyphSize: 92)
+                        .shadow(color: OnboardingVisuals.accent.opacity(0.20), radius: 16, x: 0, y: 10)
+                        .padding(.bottom, 2)
 
                     VStack(spacing: 10) {
-                        Text("We use your camera to label real-\nworld objects.")
-                            .font(.system(size: 16, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.65))
-                            .multilineTextAlignment(.center)
+                        Text("Turn your camera")
+                            .foregroundStyle(Color.white.opacity(0.92))
 
-                        Text("No photos are stored.")
-                            .font(.system(size: 16, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.65))
+                        HStack(spacing: 0) {
+                            Text("into a ")
+                                .foregroundStyle(Color.white.opacity(0.92))
+                            Text("language lens")
+                                .foregroundStyle(OnboardingVisuals.accent)
+                        }
                     }
-                    .padding(.top, 2)
+                    .font(.system(size: 34, weight: .medium, design: .rounded))
+                    .multilineTextAlignment(.center)
+
+                    Text("We use your camera to label real-world objects.\nNo photos are stored.")
+                        .font(.system(size: 16, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.62))
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                        .padding(.top, 4)
 
                     VStack(spacing: 14) {
                         OnboardingPillButton(title: "Enable Camera", style: .filled, action: onEnableCamera)
@@ -292,64 +292,6 @@ private struct OnboardingCameraPermissionScreen: View {
             .padding(.horizontal, 28)
         }
         .ignoresSafeArea()
-    }
-}
-
-private struct OnboardingCameraIcon: View {
-    var body: some View {
-        ZStack {
-            OnboardingCameraOutline()
-                .stroke(
-                    OnboardingVisuals.accent.opacity(0.75),
-                    style: StrokeStyle(lineWidth: 2.25, lineCap: .round, lineJoin: .round)
-                )
-                .frame(width: 112, height: 82)
-                .shadow(color: OnboardingVisuals.accent.opacity(0.18), radius: 14, x: 0, y: 10)
-                .allowsHitTesting(false)
-
-            LangscapeLogo(style: .mark, glyphSize: 52)
-                .shadow(color: OnboardingVisuals.accent.opacity(0.18), radius: 10, x: 0, y: 6)
-                .allowsHitTesting(false)
-
-            VStack(alignment: .trailing, spacing: 4) {
-                Capsule().frame(width: 16, height: 2)
-                Capsule().frame(width: 16, height: 2)
-                Capsule().frame(width: 16, height: 2)
-            }
-            .foregroundStyle(OnboardingVisuals.accent.opacity(0.55))
-            .offset(x: 34, y: -8)
-            .allowsHitTesting(false)
-        }
-        .padding(.bottom, 6)
-    }
-}
-
-private struct OnboardingCameraOutline: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-
-        let cornerRadius = min(rect.width, rect.height) * 0.22
-        let bodyHeight = rect.height * 0.80
-        let bodyRect = CGRect(
-            x: rect.minX,
-            y: rect.minY + rect.height - bodyHeight,
-            width: rect.width,
-            height: bodyHeight
-        )
-
-        path.addRoundedRect(in: bodyRect, cornerSize: CGSize(width: cornerRadius, height: cornerRadius))
-
-        let humpWidth = rect.width * 0.30
-        let humpHeight = rect.height * 0.18
-        let humpRect = CGRect(
-            x: rect.midX - humpWidth / 2,
-            y: bodyRect.minY - humpHeight * 0.55,
-            width: humpWidth,
-            height: humpHeight
-        )
-        path.addRoundedRect(in: humpRect, cornerSize: CGSize(width: humpHeight * 0.55, height: humpHeight * 0.55))
-
-        return path
     }
 }
 
@@ -409,19 +351,22 @@ private struct OnboardingLabelChip: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 18, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.white.opacity(0.92))
-            .padding(.horizontal, 22)
-            .padding(.vertical, 12)
-            .background(
+            .font(.system(size: 20, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.white.opacity(0.95))
+            .padding(.horizontal, 26)
+            .padding(.vertical, 13)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(
                 Capsule()
-                    .fill(Color.black.opacity(0.26))
+                    .strokeBorder(OnboardingVisuals.accent.opacity(0.55), lineWidth: 1.5)
             )
             .overlay(
                 Capsule()
-                    .strokeBorder(OnboardingVisuals.accent.opacity(0.60), lineWidth: 1.5)
+                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.75)
+                    .blendMode(.overlay)
             )
-            .shadow(color: OnboardingVisuals.accent.opacity(0.32), radius: 18, x: 0, y: 10)
+            .shadow(color: Color.black.opacity(0.28), radius: 14, x: 0, y: 10)
+            .shadow(color: OnboardingVisuals.accent.opacity(0.24), radius: 22, x: 0, y: 10)
     }
 }
 
