@@ -229,20 +229,28 @@ public struct VLMReferee: @unchecked Sendable {
     /// Filter detections with VLM verification (legacy, single-threaded)
     public func filter(_ detections: [Detection], pixelBuffer: CVPixelBuffer, orientationRaw: UInt32?, minConf: Double = 0.30, maxConf: Double = 0.70) -> [Detection] {
         guard !detections.isEmpty else { return detections }
-        let W = Double(CVPixelBufferGetWidth(pixelBuffer))
-        let H = Double(CVPixelBufferGetHeight(pixelBuffer))
         #if canImport(ImageIO)
         let orientation = orientationRaw.flatMap { CGImagePropertyOrientation(rawValue: $0) } ?? .up
         #else
         let orientation: CGImagePropertyOrientation = .up
         #endif
         let baseImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(orientation)
+        let extent = baseImage.extent
+        let W = Double(extent.width)
+        let H = Double(extent.height)
 
         var kept: [Detection] = []
         kept.reserveCapacity(detections.count)
         for det in detections {
             if det.confidence > maxConf { kept.append(det); continue }
-            let rect = CGRect(x: det.boundingBox.origin.x * W, y: det.boundingBox.origin.y * H, width: det.boundingBox.size.width * W, height: det.boundingBox.size.height * H)
+            // Detection bounding boxes are normalized with origin at top-left (UI space),
+            // while CIImage coordinates are bottom-left. Flip Y back for cropping.
+            let rect = CGRect(
+                x: extent.origin.x + det.boundingBox.origin.x * W,
+                y: extent.origin.y + (1.0 - det.boundingBox.origin.y - det.boundingBox.size.height) * H,
+                width: det.boundingBox.size.width * W,
+                height: det.boundingBox.size.height * H
+            ).intersection(extent)
             guard rect.width >= 10, rect.height >= 10 else { kept.append(det); continue }
 
             // Determine acceptance gate based on input confidence
@@ -270,14 +278,15 @@ public struct VLMReferee: @unchecked Sendable {
     /// Processes detections in batches to reduce overhead
     public func filterBatch(_ detections: [Detection], pixelBuffer: CVPixelBuffer, orientationRaw: UInt32?, minConf: Double = 0.30, maxConf: Double = 0.70, maxVerify: Int = 1000, earlyStopThreshold: Int = 3000) -> [Detection] {
         guard !detections.isEmpty else { return detections }
-        let W = Double(CVPixelBufferGetWidth(pixelBuffer))
-        let H = Double(CVPixelBufferGetHeight(pixelBuffer))
         #if canImport(ImageIO)
         let orientation = orientationRaw.flatMap { CGImagePropertyOrientation(rawValue: $0) } ?? .up
         #else
         let orientation: CGImagePropertyOrientation = .up
         #endif
         let baseImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(orientation)
+        let extent = baseImage.extent
+        let W = Double(extent.width)
+        let H = Double(extent.height)
 
         var kept: [Detection] = []
         kept.reserveCapacity(detections.count)
@@ -290,7 +299,14 @@ public struct VLMReferee: @unchecked Sendable {
                 continue
             }
 
-            let rect = CGRect(x: det.boundingBox.origin.x * W, y: det.boundingBox.origin.y * H, width: det.boundingBox.size.width * W, height: det.boundingBox.size.height * H)
+            // Detection bounding boxes are normalized with origin at top-left (UI space),
+            // while CIImage coordinates are bottom-left. Flip Y back for cropping.
+            let rect = CGRect(
+                x: extent.origin.x + det.boundingBox.origin.x * W,
+                y: extent.origin.y + (1.0 - det.boundingBox.origin.y - det.boundingBox.size.height) * H,
+                width: det.boundingBox.size.width * W,
+                height: det.boundingBox.size.height * H
+            ).intersection(extent)
             guard rect.width >= 10, rect.height >= 10 else {
                 kept.append(det)
                 continue

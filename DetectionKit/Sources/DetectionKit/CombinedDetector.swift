@@ -25,9 +25,9 @@ public actor CombinedDetector: DetectionService {
         self.filter = DetectionFilter()
 
         // VLM Referee: VERIFICATION ONLY (not proposal generation)
-        // Used to keep only detections the VLM agrees with strongly (better gameplay precision).
+        // Used to filter out obvious false positives and improve label precision.
         do {
-            let r = try VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.80, minKeepGate: 0.70, maxProposals: 64, geminiAPIKey: geminiAPIKey)
+            let r = try VLMReferee(logger: logger, cropSize: 256, acceptGate: 0.80, minKeepGate: 0.55, maxProposals: 64, geminiAPIKey: geminiAPIKey)
             self.referee = r
             self.refereeReady = true
         } catch {
@@ -152,8 +152,13 @@ public actor CombinedDetector: DetectionService {
                 maxVerify: 200,  // Limit verification workload
                 earlyStopThreshold: 1000  // Stop when enough verified
             )
-            results.append(contentsOf: verified)
-            await logger.log("CombinedDetector: VLM Referee kept \(verified.count)/\(candidatesForVerification.count) detections after verification", level: .info, category: "DetectionKit.CombinedDetector")
+            if verified.isEmpty {
+                results.append(contentsOf: candidatesForVerification)
+                await logger.log("CombinedDetector: VLM Referee kept 0/\(candidatesForVerification.count); falling back to unverified YOLO candidates", level: .warning, category: "DetectionKit.CombinedDetector")
+            } else {
+                results.append(contentsOf: verified)
+                await logger.log("CombinedDetector: VLM Referee kept \(verified.count)/\(candidatesForVerification.count) detections after verification", level: .info, category: "DetectionKit.CombinedDetector")
+            }
             #endif
         } else {
             // No referee available - accept mid-confidence detections without verification
