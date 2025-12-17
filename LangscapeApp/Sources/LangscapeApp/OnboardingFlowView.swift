@@ -99,6 +99,7 @@ private struct OnboardingHeroScreen: View {
                 OnboardingHeroBackdrop()
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()
+                    .allowsHitTesting(false)
 
                 LinearGradient(
                     colors: [
@@ -110,9 +111,11 @@ private struct OnboardingHeroScreen: View {
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
+                .allowsHitTesting(false)
 
                 OnboardingNoiseOverlay(opacity: 0.10)
                     .ignoresSafeArea()
+                    .allowsHitTesting(false)
 
                 VStack(spacing: 0) {
                     OnboardingHeroTitle()
@@ -134,12 +137,14 @@ private struct OnboardingHeroScreen: View {
                         x: proxy.size.width * 0.72,
                         y: proxy.size.height * 0.30
                     )
+                    .allowsHitTesting(false)
 
                 OnboardingLabelChip(text: "Couch")
                     .position(
                         x: proxy.size.width * 0.42,
                         y: proxy.size.height * 0.46
                     )
+                    .allowsHitTesting(false)
             }
         }
         .ignoresSafeArea()
@@ -176,6 +181,7 @@ private struct OnboardingLanguageSelectionScreen: View {
     var body: some View {
         ZStack {
             OnboardingBackground()
+                .allowsHitTesting(false)
 
             VStack(spacing: 0) {
                 Spacer()
@@ -236,6 +242,7 @@ private struct OnboardingCameraPermissionScreen: View {
     var body: some View {
         ZStack {
             OnboardingBackground()
+                .allowsHitTesting(false)
 
             VStack(spacing: 0) {
                 Spacer()
@@ -291,14 +298,58 @@ private struct OnboardingCameraPermissionScreen: View {
 private struct OnboardingCameraIcon: View {
     var body: some View {
         ZStack {
-            Image(systemName: "camera")
-                .font(.system(size: 74, weight: .ultraLight))
-                .foregroundStyle(OnboardingVisuals.accent.opacity(0.55))
+            OnboardingCameraOutline()
+                .stroke(
+                    OnboardingVisuals.accent.opacity(0.75),
+                    style: StrokeStyle(lineWidth: 2.25, lineCap: .round, lineJoin: .round)
+                )
+                .frame(width: 112, height: 82)
+                .shadow(color: OnboardingVisuals.accent.opacity(0.18), radius: 14, x: 0, y: 10)
+                .allowsHitTesting(false)
 
-            LangscapeLogo(style: .mark, glyphSize: 56)
-                .shadow(color: OnboardingVisuals.accent.opacity(0.20), radius: 10, x: 0, y: 6)
+            LangscapeLogo(style: .mark, glyphSize: 52)
+                .shadow(color: OnboardingVisuals.accent.opacity(0.18), radius: 10, x: 0, y: 6)
+                .allowsHitTesting(false)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Capsule().frame(width: 16, height: 2)
+                Capsule().frame(width: 16, height: 2)
+                Capsule().frame(width: 16, height: 2)
+            }
+            .foregroundStyle(OnboardingVisuals.accent.opacity(0.55))
+            .offset(x: 34, y: -8)
+            .allowsHitTesting(false)
         }
         .padding(.bottom, 6)
+    }
+}
+
+private struct OnboardingCameraOutline: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+
+        let cornerRadius = min(rect.width, rect.height) * 0.22
+        let bodyHeight = rect.height * 0.80
+        let bodyRect = CGRect(
+            x: rect.minX,
+            y: rect.minY + rect.height - bodyHeight,
+            width: rect.width,
+            height: bodyHeight
+        )
+
+        path.addRoundedRect(in: bodyRect, cornerSize: CGSize(width: cornerRadius, height: cornerRadius))
+
+        let humpWidth = rect.width * 0.30
+        let humpHeight = rect.height * 0.18
+        let humpRect = CGRect(
+            x: rect.midX - humpWidth / 2,
+            y: bodyRect.minY - humpHeight * 0.55,
+            width: humpWidth,
+            height: humpHeight
+        )
+        path.addRoundedRect(in: humpRect, cornerSize: CGSize(width: humpHeight * 0.55, height: humpHeight * 0.55))
+
+        return path
     }
 }
 
@@ -349,6 +400,7 @@ private struct OnboardingLanguageRow: View {
             .shadow(color: OnboardingVisuals.accent.opacity(0.10), radius: 12, x: 0, y: 8)
         }
         .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -408,13 +460,14 @@ private struct OnboardingPillButton: View {
             Text(title)
                 .font(.system(size: 18, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.92))
-                .padding(.vertical, 16)
-                .frame(maxWidth: 340)
+                .frame(maxWidth: .infinity)
                 .frame(height: 54)
+                .background(background)
+                .overlay(border)
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .background(background)
-        .overlay(border)
+        .frame(maxWidth: 340)
         .shadow(color: shadowColor, radius: 18, x: 0, y: 10)
     }
 
@@ -604,48 +657,9 @@ private struct SeededRandomGenerator: RandomNumberGenerator {
 
 private struct OnboardingHeroBackdrop: View {
     var body: some View {
-        GeometryReader { proxy in
-            let size = proxy.size
-
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.10, green: 0.12, blue: 0.15),
-                        Color(red: 0.05, green: 0.05, blue: 0.07)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.98, green: 0.72, blue: 0.45).opacity(0.78),
-                                Color(red: 0.26, green: 0.44, blue: 0.78).opacity(0.62)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: size.width * 0.35, height: size.height * 0.44)
-                    .position(x: size.width * 0.26, y: size.height * 0.38)
-                    .blur(radius: 0.35)
-                    .shadow(color: Color.black.opacity(0.35), radius: 24, x: 0, y: 16)
-
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .fill(Color(red: 0.16, green: 0.18, blue: 0.22).opacity(0.95))
-                    .frame(width: size.width * 0.76, height: size.height * 0.22)
-                    .position(x: size.width * 0.50, y: size.height * 0.62)
-                    .shadow(color: Color.black.opacity(0.45), radius: 30, x: 0, y: 22)
-
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.black.opacity(0.32))
-                    .frame(width: size.width * 0.32, height: size.height * 0.16)
-                    .position(x: size.width * 0.74, y: size.height * 0.42)
-                    .shadow(color: Color.black.opacity(0.35), radius: 20, x: 0, y: 14)
-            }
-            .blur(radius: 0.25)
-        }
+        OnboardingHeroRoomBackdrop()
+            .blur(radius: 0.35)
+            .saturation(0.95)
+            .contrast(1.05)
     }
 }

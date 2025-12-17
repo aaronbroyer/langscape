@@ -76,7 +76,7 @@ final class OnboardingViewModel: ObservableObject {
         hasScheduledSplashAdvance = true
 
         Task {
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
             advanceFromSplash()
         }
     }
