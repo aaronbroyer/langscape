@@ -145,6 +145,13 @@ private struct OnboardingHeroScreen: View {
                         y: proxy.size.height * 0.46
                     )
                     .allowsHitTesting(false)
+
+                OnboardingLabelChip(text: "Mug")
+                    .position(
+                        x: proxy.size.width * 0.60,
+                        y: proxy.size.height * 0.63
+                    )
+                    .allowsHitTesting(false)
             }
         }
         .ignoresSafeArea()
@@ -256,8 +263,8 @@ private struct OnboardingCameraPermissionScreen: View {
                         Text("Turn your camera")
                             .foregroundStyle(Color.white.opacity(0.92))
 
-                        HStack(spacing: 0) {
-                            Text("into a ")
+                        HStack(spacing: 6) {
+                            Text("into a")
                                 .foregroundStyle(Color.white.opacity(0.92))
                             Text("language lens")
                                 .foregroundStyle(OnboardingVisuals.accent)
