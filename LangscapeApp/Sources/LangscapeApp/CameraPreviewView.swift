@@ -320,15 +320,31 @@ struct CameraPreviewView: View {
     private var masksLayer: some View {
         ZStack {
             ForEach(viewModel.gameObjects) { object in
-                Image(decorative: object.mask, scale: 1)
-                    .renderingMode(Image.TemplateRenderingMode.template)
+                let accent = ColorPalette.accent.swiftUIColor
+                let outlineOpacity = object.isMatched ? 0.22 : 0.92
+                let glowOpacity = object.isMatched ? 0.10 : 0.55
+                let glowBlur: CGFloat = object.isMatched ? 6 : 10
+                let glowShadow: CGFloat = object.isMatched ? 12 : 18
+
+                let mask = Image(decorative: object.mask, scale: 1)
+                    .renderingMode(.template)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .foregroundStyle(ColorPalette.accent.swiftUIColor)
-                    .opacity(object.isMatched ? 0.16 : 0.55)
-                    .blendMode(BlendMode.screen)
-                    .shadow(color: ColorPalette.accent.swiftUIColor.opacity(object.isMatched ? 0.15 : 0.55), radius: 14, x: 0, y: 8)
-                    .ignoresSafeArea()
+                    .foregroundStyle(accent)
+
+                ZStack {
+                    mask
+                        .opacity(glowOpacity)
+                        .blur(radius: glowBlur)
+                        .blendMode(.screen)
+
+                    mask
+                        .opacity(outlineOpacity)
+                        .blendMode(.screen)
+                }
+                .compositingGroup()
+                .shadow(color: accent.opacity(glowOpacity), radius: glowShadow, x: 0, y: 0)
+                .ignoresSafeArea()
             }
         }
     }

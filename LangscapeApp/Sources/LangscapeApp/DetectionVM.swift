@@ -350,7 +350,11 @@ final class DetectionVM: ObservableObject {
         objects.reserveCapacity(round.objects.count)
 
         for object in round.objects {
-            let mask = try await segmenter.segment(pixelBuffer: pixelBuffer, boundingBox: object.boundingBox, orientationRaw: orientationRaw)
+            let mask = try await segmenter.segmentOutline(
+                pixelBuffer: pixelBuffer,
+                boundingBox: object.boundingBox,
+                orientationRaw: orientationRaw
+            )
             objects.append(GameObject(id: object.id, detection: Detection(id: object.id, label: object.sourceLabel, confidence: object.confidence, boundingBox: object.boundingBox), mask: mask, isMatched: false))
         }
 
