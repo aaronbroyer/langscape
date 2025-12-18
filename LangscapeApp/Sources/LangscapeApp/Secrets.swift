@@ -1,12 +1,19 @@
 import Foundation
+import Utilities
 
 enum Secrets {
     /// Gemini 1.5 Flash API key used by `VLMReferee` for cloud adjudication.
     /// Looked up from the environment or optional `.env` file so the value is never committed.
-    static let geminiAPIKey: String = {
+    static let geminiAPIKey: String? = {
         guard let token = EnvLoader.shared["GEMINI_API_KEY"], !token.isEmpty else {
-            assertionFailure("Missing GEMINI_API_KEY. Add it to your environment or .env file.")
-            return ""
+            Task {
+                await Logger.shared.log(
+                    "Missing GEMINI_API_KEY; continuing without cloud referee (YOLO-only mode).",
+                    level: .warning,
+                    category: "LangscapeApp.Secrets"
+                )
+            }
+            return nil
         }
         return token
     }()
@@ -58,9 +65,12 @@ private final class EnvLoader {
 
     #if DEBUG
     private static func dotEnvURL() -> URL? {
-        // First attempt to find a bundled .env resource (only present if the developer adds it to the target).
-        if let bundled = Bundle.main.url(forResource: ".env", withExtension: nil) {
-            return bundled
+        // Prefer a bundled .env if one exists (useful for simulator/device debug runs).
+        if let resourceURL = Bundle.main.resourceURL {
+            let candidate = resourceURL.appendingPathComponent(".env")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
         }
 
         // Fallback: derive repository root from the compile-time path of this file.

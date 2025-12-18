@@ -21,6 +21,24 @@ targets:
     platform: iOS
     sources:
       - LangscapeApp/Sources/LangscapeApp
+    postBuildScripts:
+      - name: Copy .env (Debug only)
+        script: |
+          if [ "${CONFIGURATION}" != "Debug" ]; then
+            exit 0
+          fi
+
+          SRC="${SRCROOT}/.env"
+          if [ ! -f "${SRC}" ]; then
+            echo "warning: .env not found at ${SRC} (GEMINI_API_KEY will be unavailable)"
+            exit 0
+          fi
+
+          DEST_DIR="${TARGET_BUILD_DIR}/${FULL_PRODUCT_NAME}"
+          mkdir -p "${DEST_DIR}"
+          cp "${SRC}" "${DEST_DIR}/.env"
+          echo "Copied .env into app bundle."
+        basedOnDependencyAnalysis: false
     info:
       path: LangscapeApp/Info.plist
     dependencies:
