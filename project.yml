@@ -41,6 +41,12 @@ targets:
         basedOnDependencyAnalysis: false
     info:
       path: LangscapeApp/Info.plist
+      properties:
+        CFBundleShortVersionString: '$(MARKETING_VERSION)'
+        CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+        LSRequiresIPhoneOS: true
+        NSCameraUsageDescription: We use your camera to interact with real-world objects. No photos are stored.
+        UILaunchScreen: {}
     dependencies:
       - package: DesignSystem
         product: DesignSystem
