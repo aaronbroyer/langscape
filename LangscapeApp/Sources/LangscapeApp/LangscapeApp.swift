@@ -1,38 +1,29 @@
 #if canImport(SwiftUI)
 import SwiftUI
 import DetectionKit
-import GameKitLS
 import Utilities
 
 @main
 struct LangscapeAppMain: App {
     @StateObject private var detectionViewModel: DetectionVM
-    @StateObject private var labelScrambleViewModel: LabelScrambleVM
     @StateObject private var appSettings: AppSettings
-    @StateObject private var contextManager: ContextManager
 
     init() {
         let service = CombinedDetector(geminiAPIKey: Secrets.geminiAPIKey)
-        let detectionVM = DetectionVM(
-            service: service,
-            throttleInterval: 0.08,
-            geminiAPIKey: Secrets.geminiAPIKey
+        let settings = AppSettings.shared
+        _appSettings = StateObject(wrappedValue: settings)
+        _detectionViewModel = StateObject(
+            wrappedValue: DetectionVM(
+                settings: settings,
+                objectDetector: service
+            )
         )
-        _detectionViewModel = StateObject(wrappedValue: detectionVM)
-
-        let scrambleVM = LabelScrambleVM()
-        _labelScrambleViewModel = StateObject(wrappedValue: scrambleVM)
-
-        _appSettings = StateObject(wrappedValue: AppSettings.shared)
-        _contextManager = StateObject(wrappedValue: ContextManager(detector: service))
     }
 
     var body: some Scene {
         WindowGroup {
             AppFlowView(
-                detectionViewModel: detectionViewModel,
-                gameViewModel: labelScrambleViewModel,
-                contextManager: contextManager
+                detectionViewModel: detectionViewModel
             )
             .environmentObject(appSettings)
         }
@@ -46,8 +37,6 @@ private struct AppFlowView: View {
 
     @EnvironmentObject private var settings: AppSettings
     @ObservedObject var detectionViewModel: DetectionVM
-    @ObservedObject var gameViewModel: LabelScrambleVM
-    @ObservedObject var contextManager: ContextManager
 
     @State private var path: [Route] = []
     @StateObject private var onboardingViewModel = OnboardingViewModel()
@@ -63,9 +52,7 @@ private struct AppFlowView: View {
                 switch route {
                 case .experience:
                     CameraPreviewView(
-                        viewModel: detectionViewModel,
-                        gameViewModel: gameViewModel,
-                        contextManager: contextManager
+                        viewModel: detectionViewModel
                     )
                     .navigationBarBackButtonHidden(true)
                     .toolbar {

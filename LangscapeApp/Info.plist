@@ -21,7 +21,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera is used for live detection and language activities.</string>
+	<string>We use your camera to interact with real-world objects. No photos are stored.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>
