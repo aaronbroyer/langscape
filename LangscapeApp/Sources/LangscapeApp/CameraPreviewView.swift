@@ -321,10 +321,11 @@ struct CameraPreviewView: View {
         ZStack {
             ForEach(viewModel.gameObjects) { object in
                 let accent = ColorPalette.accent.swiftUIColor
-                let outlineOpacity = object.isMatched ? 0.22 : 0.92
-                let glowOpacity = object.isMatched ? 0.10 : 0.55
-                let glowBlur: CGFloat = object.isMatched ? 6 : 10
-                let glowShadow: CGFloat = object.isMatched ? 12 : 18
+                let outlineOpacity = object.isMatched ? 0.18 : 0.82
+                let glowOpacity = object.isMatched ? 0.08 : 0.42
+                let innerGlowBlur: CGFloat = object.isMatched ? 6 : 9
+                let outerGlowBlur: CGFloat = object.isMatched ? 14 : 22
+                let glowShadow: CGFloat = object.isMatched ? 14 : 26
 
                 let mask = Image(decorative: object.mask, scale: 1)
                     .renderingMode(.template)
@@ -334,13 +335,18 @@ struct CameraPreviewView: View {
 
                 ZStack {
                     mask
+                        .opacity(glowOpacity * 0.55)
+                        .blur(radius: outerGlowBlur)
+                        .blendMode(.plusLighter)
+
+                    mask
                         .opacity(glowOpacity)
-                        .blur(radius: glowBlur)
-                        .blendMode(.screen)
+                        .blur(radius: innerGlowBlur)
+                        .blendMode(.plusLighter)
 
                     mask
                         .opacity(outlineOpacity)
-                        .blendMode(.screen)
+                        .blendMode(.plusLighter)
                 }
                 .compositingGroup()
                 .shadow(color: accent.opacity(glowOpacity), radius: glowShadow, x: 0, y: 0)

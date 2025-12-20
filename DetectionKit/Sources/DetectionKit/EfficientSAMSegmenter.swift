@@ -108,8 +108,9 @@ public actor EfficientSAMSegmenter {
         pixelBuffer: CVPixelBuffer,
         boundingBox: NormalizedRect,
         orientationRaw: UInt32?,
-        minimumAlpha: UInt8 = 160,
-        edgeRadius: CGFloat = 4
+        minimumAlpha: UInt8 = 96,
+        cleanupRadius: CGFloat = 0,
+        edgeRadius: CGFloat = 2
     ) async throws -> CGImage {
         try await prepare()
         guard let model else { throw DetectionError.modelNotFound }
@@ -151,10 +152,16 @@ public actor EfficientSAMSegmenter {
             padY: padY
         )
 
+        let boxPixelWidth = CGFloat(boundingBox.size.width) * CGFloat(originalWidth)
+        let boxPixelHeight = CGFloat(boundingBox.size.height) * CGFloat(originalHeight)
+        let autoCleanupRadius = max(3, min(14, max(boxPixelWidth, boxPixelHeight) / 120))
+        let resolvedCleanupRadius = cleanupRadius > 0 ? cleanupRadius : autoCleanupRadius
+
         let outlineAlpha = try outlineAlphaBytes(
             from: alpha,
             boundingBox: boundingBox,
             minimumAlpha: minimumAlpha,
+            cleanupRadius: resolvedCleanupRadius,
             edgeRadius: edgeRadius
         )
 
@@ -334,7 +341,7 @@ private extension EfficientSAMSegmenter {
             bitmapInfo: CGBitmapInfo(rawValue: 0),
             provider: grayProvider,
             decode: nil,
-            shouldInterpolate: false,
+            shouldInterpolate: true,
             intent: .defaultIntent
         )!
 
@@ -397,16 +404,18 @@ private extension EfficientSAMSegmenter {
         from alpha: AlphaMask,
         boundingBox: NormalizedRect,
         minimumAlpha: UInt8,
+        cleanupRadius: CGFloat,
         edgeRadius: CGFloat
     ) throws -> AlphaMask {
+        let cleanupPadding = max(8, Int((cleanupRadius + edgeRadius).rounded(.up)) * 3)
         let paddedBox = paddedPixelRect(
             for: boundingBox,
             width: alpha.width,
             height: alpha.height,
-            padding: max(2, Int(edgeRadius.rounded(.up)) * 2)
+            padding: cleanupPadding
         )
 
-        let threshold = adaptiveThreshold(
+        var threshold = adaptiveThreshold(
             alpha: alpha.bytes,
             width: alpha.width,
             pixelRect: paddedBox,
@@ -414,12 +423,35 @@ private extension EfficientSAMSegmenter {
         )
 
         var binary = [UInt8](repeating: 0, count: alpha.bytes.count)
-        for y in paddedBox.minY..<paddedBox.maxY {
-            let rowStart = y * alpha.width
-            for x in paddedBox.minX..<paddedBox.maxX {
-                let index = rowStart + x
-                binary[index] = alpha.bytes[index] >= threshold ? 255 : 0
+        func fillBinary(threshold: UInt8) -> Int {
+            var onCount = 0
+            for y in paddedBox.minY..<paddedBox.maxY {
+                let rowStart = y * alpha.width
+                for x in paddedBox.minX..<paddedBox.maxX {
+                    let index = rowStart + x
+                    if alpha.bytes[index] >= threshold {
+                        binary[index] = 255
+                        onCount += 1
+                    } else {
+                        binary[index] = 0
+                    }
+                }
             }
+            return onCount
+        }
+
+        let boxArea = max(1, (paddedBox.maxX - paddedBox.minX) * (paddedBox.maxY - paddedBox.minY))
+        var onCount = fillBinary(threshold: threshold)
+
+        let minFill: Double = 0.02
+        let maxFill: Double = 0.85
+        let fillRatio = Double(onCount) / Double(boxArea)
+        if fillRatio < minFill {
+            threshold = UInt8(max(0, Int(threshold) - 32))
+            onCount = fillBinary(threshold: threshold)
+        } else if fillRatio > maxFill {
+            threshold = UInt8(min(255, Int(threshold) + 24))
+            onCount = fillBinary(threshold: threshold)
         }
 
         let binaryData = Data(binary)
@@ -431,15 +463,18 @@ private extension EfficientSAMSegmenter {
             colorSpace: nil
         )
 
-        guard let filter = CIFilter(name: "CIMorphologyGradient") else {
-            throw DetectionError.inferenceFailed("CIMorphologyGradient unavailable")
-        }
-        filter.setValue(ciBinary, forKey: kCIInputImageKey)
-        filter.setValue(edgeRadius, forKey: kCIInputRadiusKey)
-        guard let outlined = filter.outputImage?
-            .cropped(to: CGRect(x: 0, y: 0, width: CGFloat(alpha.width), height: CGFloat(alpha.height))) else {
-            throw DetectionError.inferenceFailed("Failed to compute outline mask")
-        }
+        let cleaned = try applyMorphologyCleanup(
+            to: ciBinary,
+            cleanupRadius: cleanupRadius,
+            cropWidth: alpha.width,
+            cropHeight: alpha.height
+        )
+        let outlined = try morphologyGradient(
+            for: cleaned,
+            edgeRadius: edgeRadius,
+            cropWidth: alpha.width,
+            cropHeight: alpha.height
+        )
 
         var outline = [UInt8](repeating: 0, count: alpha.width * alpha.height)
         ciContext.render(
@@ -451,7 +486,49 @@ private extension EfficientSAMSegmenter {
             colorSpace: nil
         )
 
+        for index in outline.indices {
+            let value = outline[index]
+            if value < 10 {
+                outline[index] = 0
+            } else {
+                outline[index] = UInt8(min(255, Int(value) * 2))
+            }
+        }
+
         return AlphaMask(width: alpha.width, height: alpha.height, bytes: outline)
+    }
+
+    private func applyMorphologyCleanup(to image: CIImage, cleanupRadius: CGFloat, cropWidth: Int, cropHeight: Int) throws -> CIImage {
+        func run(_ name: String, input: CIImage, radius: CGFloat) -> CIImage {
+            guard let filter = CIFilter(name: name) else { return input }
+            filter.setValue(input, forKey: kCIInputImageKey)
+            filter.setValue(radius, forKey: kCIInputRadiusKey)
+            return filter.outputImage ?? input
+        }
+
+        let openRadius = max(1, cleanupRadius * 0.35)
+        let closeRadius = max(openRadius + 1, cleanupRadius)
+
+        var result = image
+        result = run("CIMorphologyMinimum", input: result, radius: openRadius)
+        result = run("CIMorphologyMaximum", input: result, radius: openRadius)
+        result = run("CIMorphologyMaximum", input: result, radius: closeRadius)
+        result = run("CIMorphologyMinimum", input: result, radius: closeRadius)
+        result = run("CIMorphologyMinimum", input: result, radius: 1)
+
+        return result.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(cropWidth), height: CGFloat(cropHeight)))
+    }
+
+    private func morphologyGradient(for image: CIImage, edgeRadius: CGFloat, cropWidth: Int, cropHeight: Int) throws -> CIImage {
+        guard let filter = CIFilter(name: "CIMorphologyGradient") else {
+            throw DetectionError.inferenceFailed("CIMorphologyGradient unavailable")
+        }
+        filter.setValue(image, forKey: kCIInputImageKey)
+        filter.setValue(edgeRadius, forKey: kCIInputRadiusKey)
+        guard let outlined = filter.outputImage else {
+            throw DetectionError.inferenceFailed("Failed to compute outline mask")
+        }
+        return outlined.cropped(to: CGRect(x: 0, y: 0, width: CGFloat(cropWidth), height: CGFloat(cropHeight)))
     }
 
     private struct PixelRect {
