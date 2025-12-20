@@ -350,7 +350,7 @@ final class DetectionVM: ObservableObject {
         objects.reserveCapacity(round.objects.count)
 
         for object in round.objects {
-            let mask = try await segmenter.segmentOutline(
+            let mask = try await segmenter.segment(
                 pixelBuffer: pixelBuffer,
                 boundingBox: object.boundingBox,
                 orientationRaw: orientationRaw

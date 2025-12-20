@@ -320,10 +320,10 @@ struct CameraPreviewView: View {
     private var masksLayer: some View {
         ZStack {
             ForEach(viewModel.gameObjects) { object in
-                let outlineColor = object.isMatched ? ColorPalette.primary.swiftUIColor : ColorPalette.secondary.swiftUIColor
-                let glowColor = object.isMatched ? ColorPalette.primary.swiftUIColor : ColorPalette.secondary.swiftUIColor
-                let outlineOpacity = object.isMatched ? 0.14 : 0.42
-                let glowOpacity = object.isMatched ? 0.07 : 0.18
+                let outlineColor = object.isMatched ? ColorPalette.primary.swiftUIColor : ColorPalette.accent.swiftUIColor
+                let glowColor = object.isMatched ? ColorPalette.primary.swiftUIColor : ColorPalette.accent.swiftUIColor
+                let outlineOpacity = object.isMatched ? 0.22 : 0.75
+                let glowOpacity = object.isMatched ? 0.12 : 0.45
                 let innerGlowBlur: CGFloat = object.isMatched ? 6 : 10
                 let outerGlowBlur: CGFloat = object.isMatched ? 12 : 20
                 let glowShadow: CGFloat = object.isMatched ? 10 : 18
