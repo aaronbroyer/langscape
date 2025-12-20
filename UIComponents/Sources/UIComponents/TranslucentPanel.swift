@@ -15,12 +15,40 @@ public struct TranslucentPanel<Content: View>: View {
         content
             .padding(.horizontal, Spacing.medium.cgFloat)
             .padding(.vertical, Spacing.small.cgFloat)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .background(panelBackground)
+            .overlay(panelBorder)
+            .shadow(color: Color.black.opacity(0.16), radius: 14, x: 0, y: 10)
+    }
+
+    private var panelShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+
+    private var panelBackground: some View {
+        panelShape
+            .fill(.ultraThinMaterial)
             .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(ColorPalette.surface.swiftUIColor.opacity(0.25), lineWidth: 1)
+                panelShape.fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.18),
+                            Color.white.opacity(0.05),
+                            Color.black.opacity(0.12)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
             )
-            .shadow(color: Color.black.opacity(0.12), radius: 12, x: 0, y: 8)
+    }
+
+    private var panelBorder: some View {
+        panelShape
+            .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+            .overlay(
+                panelShape
+                    .strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5)
+            )
     }
 }
 

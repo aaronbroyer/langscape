@@ -320,36 +320,39 @@ struct CameraPreviewView: View {
     private var masksLayer: some View {
         ZStack {
             ForEach(viewModel.gameObjects) { object in
-                let accent = ColorPalette.accent.swiftUIColor
-                let outlineOpacity = object.isMatched ? 0.18 : 0.82
-                let glowOpacity = object.isMatched ? 0.08 : 0.42
-                let innerGlowBlur: CGFloat = object.isMatched ? 6 : 9
-                let outerGlowBlur: CGFloat = object.isMatched ? 14 : 22
-                let glowShadow: CGFloat = object.isMatched ? 14 : 26
+                let outlineColor = object.isMatched ? ColorPalette.primary.swiftUIColor : ColorPalette.secondary.swiftUIColor
+                let glowColor = object.isMatched ? ColorPalette.primary.swiftUIColor : ColorPalette.secondary.swiftUIColor
+                let outlineOpacity = object.isMatched ? 0.14 : 0.42
+                let glowOpacity = object.isMatched ? 0.07 : 0.18
+                let innerGlowBlur: CGFloat = object.isMatched ? 6 : 10
+                let outerGlowBlur: CGFloat = object.isMatched ? 12 : 20
+                let glowShadow: CGFloat = object.isMatched ? 10 : 18
 
                 let mask = Image(decorative: object.mask, scale: 1)
                     .renderingMode(.template)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .foregroundStyle(accent)
 
                 ZStack {
                     mask
-                        .opacity(glowOpacity * 0.55)
+                        .foregroundStyle(glowColor)
+                        .opacity(glowOpacity * 0.6)
                         .blur(radius: outerGlowBlur)
-                        .blendMode(.plusLighter)
+                        .blendMode(.screen)
 
                     mask
+                        .foregroundStyle(glowColor)
                         .opacity(glowOpacity)
                         .blur(radius: innerGlowBlur)
-                        .blendMode(.plusLighter)
+                        .blendMode(.screen)
 
                     mask
+                        .foregroundStyle(outlineColor)
                         .opacity(outlineOpacity)
-                        .blendMode(.plusLighter)
+                        .blendMode(.screen)
                 }
                 .compositingGroup()
-                .shadow(color: accent.opacity(glowOpacity), radius: glowShadow, x: 0, y: 0)
+                .shadow(color: glowColor.opacity(glowOpacity), radius: glowShadow, x: 0, y: 0)
                 .ignoresSafeArea()
             }
         }
@@ -564,15 +567,24 @@ private struct StickyLabelOverlay: View {
     var body: some View {
         Text(text)
             .font(Typography.caption.font.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
             .foregroundStyle(ColorPalette.primary.swiftUIColor)
             .padding(.horizontal, Spacing.medium.cgFloat)
             .padding(.vertical, Spacing.xSmall.cgFloat)
-            .background(ColorPalette.surface.swiftUIColor.opacity(0.9), in: Capsule())
+            .background(
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        Capsule()
+                            .fill(ColorPalette.surface.swiftUIColor.opacity(0.75))
+                    )
+            )
             .overlay(
                 Capsule()
-                    .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.28), lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.28), radius: 10, x: 0, y: 6)
+            .shadow(color: Color.black.opacity(0.22), radius: 8, x: 0, y: 5)
             .position(x: frame.midX, y: frame.midY)
     }
 }
