@@ -30,8 +30,6 @@ let package = Package(
                 .copy("Resources/mobileclip_s2_image.mlpackage"),
                 .copy("Resources/mobileclip_s0_text.mlpackage"),
                 .copy("Resources/mobileclip_s0_image.mlpackage"),
-                // Segmentation
-                .copy("Resources/EfficientSAMVITS.mlpackage"),
                 // Label banks and vocabularies
                 .copy("Resources/labelbank_en.txt"),
                 .copy("Resources/labelbank_en_curated.txt"),

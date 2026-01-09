@@ -22,13 +22,6 @@ enum GameState: Equatable {
     case summary
 }
 
-struct GameObject: Identifiable {
-    let id: UUID
-    let detection: Detection
-    let mask: CGImage
-    var isMatched: Bool = false
-}
-
 @MainActor
 final class DetectionVM: ObservableObject {
     enum Overlay: Equatable {
@@ -40,20 +33,19 @@ final class DetectionVM: ObservableObject {
     @Published var detectedContext: String?
     @Published var liveObjectCount: Int = 0
     @Published var snapshot: UIImage?
-    @Published var gameObjects: [GameObject] = []
     @Published var round: Round?
     @Published var placedLabels: Set<GameKitLS.Label.ID> = []
     @Published var lastIncorrectLabelID: GameKitLS.Label.ID?
     @Published var overlay: Overlay?
     @Published var inputImageSize: CGSize?
     @Published var isPaused: Bool = false
+    @Published var showIdentifiedObjectsHint: Bool = false
 
     private let logger: Logger
     private let settings: AppSettings
     private let objectDetector: CombinedDetector
     private let liveDetector: YOLOInterpreter
     private let sceneClassifier: VLMDetector
-    private let segmenter: EfficientSAMSegmenter
     private let roundGenerator: any RoundGenerating
 
     #if canImport(CoreVideo)
@@ -77,7 +69,6 @@ final class DetectionVM: ObservableObject {
         logger: Logger = .shared,
         sceneClassifier: VLMDetector = VLMDetector(),
         liveDetector: YOLOInterpreter = YOLOInterpreter(confidenceThreshold: 0.20, iouThreshold: 0.40),
-        segmenter: EfficientSAMSegmenter = EfficientSAMSegmenter(),
         roundGenerator: any RoundGenerating = RoundGenerator()
     ) {
         self.settings = settings
@@ -85,7 +76,6 @@ final class DetectionVM: ObservableObject {
         self.logger = logger
         self.sceneClassifier = sceneClassifier
         self.liveDetector = liveDetector
-        self.segmenter = segmenter
         self.roundGenerator = roundGenerator
     }
 
@@ -94,11 +84,11 @@ final class DetectionVM: ObservableObject {
         detectedContext = nil
         liveObjectCount = 0
         snapshot = nil
-        gameObjects = []
         round = nil
         placedLabels = []
         lastIncorrectLabelID = nil
         isPaused = false
+        showIdentifiedObjectsHint = false
         state = .identifyingContext
     }
 
@@ -152,6 +142,13 @@ final class DetectionVM: ObservableObject {
         }
     }
 
+    func toggleIdentifiedObjectsHint() {
+        guard state == .playing else { return }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+            showIdentifiedObjectsHint.toggle()
+        }
+    }
+
     @discardableResult
     func attemptMatch(labelID: GameKitLS.Label.ID, on objectID: UUID) -> LabelScrambleVM.MatchResult {
         guard state == .playing, !isPaused, let round else { return .ignored }
@@ -159,9 +156,6 @@ final class DetectionVM: ObservableObject {
 
         if expectedObjectID == objectID {
             placedLabels.insert(labelID)
-            if let index = gameObjects.firstIndex(where: { $0.id == objectID }) {
-                gameObjects[index].isMatched = true
-            }
             if placedLabels.count == round.labels.count {
                 Task { [weak self] in
                     await self?.completeRound()
@@ -195,10 +189,10 @@ final class DetectionVM: ObservableObject {
         await MainActor.run {
             snapshot = nil
             round = nil
-            gameObjects = []
             placedLabels = []
             lastIncorrectLabelID = nil
             isPaused = false
+            showIdentifiedObjectsHint = false
             liveObjectCount = 0
             state = .hunting
         }
@@ -283,6 +277,7 @@ final class DetectionVM: ObservableObject {
         guard let currentBuffer = currentPixelBuffer else { return }
         overlay = nil
         isPaused = false
+        showIdentifiedObjectsHint = false
         state = .scanning
 
         let orientationRaw = currentOrientationRaw
@@ -315,12 +310,11 @@ final class DetectionVM: ObservableObject {
                     return
                 }
 
-                let segmented = try await segment(round: round, pixelBuffer: currentBuffer, orientationRaw: orientationRaw)
                 await MainActor.run {
                     self.round = round
-                    self.gameObjects = segmented
                     self.placedLabels = []
                     self.lastIncorrectLabelID = nil
+                    self.showIdentifiedObjectsHint = false
                     withAnimation(.spring(response: 0.45, dampingFraction: 0.86)) {
                         self.state = .playing
                     }
@@ -345,21 +339,6 @@ final class DetectionVM: ObservableObject {
         }
     }
 
-    private func segment(round: Round, pixelBuffer: CVPixelBuffer, orientationRaw: UInt32?) async throws -> [GameObject] {
-        var objects: [GameObject] = []
-        objects.reserveCapacity(round.objects.count)
-
-        for object in round.objects {
-            let mask = try await segmenter.segment(
-                pixelBuffer: pixelBuffer,
-                boundingBox: object.boundingBox,
-                orientationRaw: orientationRaw
-            )
-            objects.append(GameObject(id: object.id, detection: Detection(id: object.id, label: object.sourceLabel, confidence: object.confidence, boundingBox: object.boundingBox), mask: mask, isMatched: false))
-        }
-
-        return objects
-    }
     #endif
 }
 #endif

@@ -43,8 +43,11 @@ struct CameraPreviewView: View {
         }
     }
 
-    private var showsMaskLayer: Bool {
-        viewModel.state == .playing && viewModel.snapshot != nil && !viewModel.gameObjects.isEmpty
+    private var showsHintLayer: Bool {
+        viewModel.state == .playing
+            && viewModel.snapshot != nil
+            && viewModel.showIdentifiedObjectsHint
+            && (viewModel.round?.objects.isEmpty == false)
     }
 
     var body: some View {
@@ -63,10 +66,11 @@ struct CameraPreviewView: View {
                         .ignoresSafeArea()
                 }
 
-                if showsMaskLayer {
-                    masksLayer
+                if showsHintLayer, let round = viewModel.round {
+                    hintBoxesLayer(for: round, in: proxy.size)
                         .offset(parallaxOffset)
                         .allowsHitTesting(false)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
 
                 overlays(in: proxy.size)
@@ -295,7 +299,9 @@ struct CameraPreviewView: View {
                 parallaxOffset: parallaxOffset,
                 frameProvider: { object in boundingRect(for: object, in: size) },
                 attemptMatch: viewModel.attemptMatch(labelID:on:),
-                onPause: viewModel.pause
+                onPause: viewModel.pause,
+                showHints: viewModel.showIdentifiedObjectsHint,
+                onToggleHints: viewModel.toggleIdentifiedObjectsHint
             )
         }
     }
@@ -317,43 +323,12 @@ struct CameraPreviewView: View {
         .allowsHitTesting(false)
     }
 
-    private var masksLayer: some View {
-        ZStack {
-            ForEach(viewModel.gameObjects) { object in
-                let outlineColor = object.isMatched ? ColorPalette.primary.swiftUIColor : ColorPalette.accent.swiftUIColor
-                let glowColor = object.isMatched ? ColorPalette.primary.swiftUIColor : ColorPalette.accent.swiftUIColor
-                let outlineOpacity = object.isMatched ? 0.22 : 0.75
-                let glowOpacity = object.isMatched ? 0.12 : 0.45
-                let innerGlowBlur: CGFloat = object.isMatched ? 6 : 10
-                let outerGlowBlur: CGFloat = object.isMatched ? 12 : 20
-                let glowShadow: CGFloat = object.isMatched ? 10 : 18
-
-                let mask = Image(decorative: object.mask, scale: 1)
-                    .renderingMode(.template)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-
-                ZStack {
-                    mask
-                        .foregroundStyle(glowColor)
-                        .opacity(glowOpacity * 0.6)
-                        .blur(radius: outerGlowBlur)
-                        .blendMode(.screen)
-
-                    mask
-                        .foregroundStyle(glowColor)
-                        .opacity(glowOpacity)
-                        .blur(radius: innerGlowBlur)
-                        .blendMode(.screen)
-
-                    mask
-                        .foregroundStyle(outlineColor)
-                        .opacity(outlineOpacity)
-                        .blendMode(.screen)
-                }
-                .compositingGroup()
-                .shadow(color: glowColor.opacity(glowOpacity), radius: glowShadow, x: 0, y: 0)
-                .ignoresSafeArea()
+    private func hintBoxesLayer(for round: Round, in viewSize: CGSize) -> some View {
+        let matchedObjects = matchedObjectIDs(in: round)
+        return ZStack {
+            ForEach(round.objects) { object in
+                let frame = boundingRect(for: object, in: viewSize)
+                HintBoundingBox(frame: frame, state: matchedObjects.contains(object.id) ? .matched : .pending)
             }
         }
     }
@@ -430,6 +405,10 @@ struct CameraPreviewView: View {
         .allowsHitTesting(true)
     }
 
+    private func matchedObjectIDs(in round: Round) -> Set<DetectedObject.ID> {
+        Set(viewModel.placedLabels.compactMap { round.target(for: $0) })
+    }
+
     private func boundingRect(for object: DetectedObject, in viewSize: CGSize) -> CGRect {
         if let mapped = projectedRect(for: object.boundingBox, inputImageSize: viewModel.inputImageSize, viewSize: viewSize) {
             return mapped
@@ -447,6 +426,8 @@ private struct SnapshotRoundPlayLayer: View {
     let frameProvider: (DetectedObject) -> CGRect
     let attemptMatch: (GameKitLS.Label.ID, UUID) -> LabelScrambleVM.MatchResult
     let onPause: () -> Void
+    let showHints: Bool
+    let onToggleHints: () -> Void
 
     private var columns: [GridItem] {
         [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
@@ -515,16 +496,22 @@ private struct SnapshotRoundPlayLayer: View {
             }
 
             if interactive {
-                Button(action: onPause) {
-                    Image(systemName: "pause.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(ColorPalette.primary.swiftUIColor)
-                        .padding(Spacing.small.cgFloat)
-                        .background(Color.white.opacity(0.8), in: Circle())
-                        .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 6)
+                HStack(spacing: Spacing.small.cgFloat) {
+                    HintToggleButton(isActive: showHints, action: onToggleHints)
+
+                    Spacer()
+
+                    Button(action: onPause) {
+                        Image(systemName: "pause.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(ColorPalette.primary.swiftUIColor)
+                            .padding(Spacing.small.cgFloat)
+                            .background(Color.white.opacity(0.8), in: Circle())
+                            .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 6)
+                    }
                 }
                 .padding(.top, 50)
-                .padding(.trailing, Spacing.large.cgFloat)
+                .padding(.horizontal, Spacing.large.cgFloat)
             }
         }
     }
@@ -557,6 +544,111 @@ private struct SnapshotRoundPlayLayer: View {
     private func expand(frame: CGRect) -> CGRect {
         let inset = max(28, min(frame.width, frame.height) * 0.3)
         return frame.insetBy(dx: -inset, dy: -inset)
+    }
+}
+
+private struct HintToggleButton: View {
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Spacing.xSmall.cgFloat) {
+                Image(systemName: isActive ? "viewfinder.circle.fill" : "viewfinder.circle")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(ColorPalette.accent.swiftUIColor)
+                Text("show identified objects")
+                    .font(Typography.caption.font.weight(.semibold))
+                    .foregroundStyle(ColorPalette.primary.swiftUIColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .padding(.horizontal, Spacing.medium.cgFloat)
+            .padding(.vertical, Spacing.xSmall.cgFloat * 1.2)
+            .background(
+                Capsule(style: .circular)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                ColorPalette.surface.swiftUIColor.opacity(isActive ? 0.98 : 0.82),
+                                ColorPalette.primary.swiftUIColor.opacity(isActive ? 0.22 : 0.08)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        Capsule(style: .circular)
+                            .stroke(ColorPalette.accent.swiftUIColor.opacity(isActive ? 0.9 : 0.4), lineWidth: isActive ? 1.6 : 1)
+                    )
+            )
+            .shadow(color: Color.black.opacity(isActive ? 0.28 : 0.18), radius: 12, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("show identified objects")
+    }
+}
+
+private struct HintBoundingBox: View {
+    enum State {
+        case pending
+        case matched
+    }
+
+    let frame: CGRect
+    let state: State
+
+    private var overlayState: ObjectTargetOverlay.State {
+        state == .matched ? .satisfied : .pending
+    }
+
+    private var accentColor: Color {
+        state == .matched ? ColorPalette.primary.swiftUIColor : ColorPalette.accent.swiftUIColor
+    }
+
+    var body: some View {
+        ZStack {
+            ObjectTargetOverlay(frame: frame, state: overlayState)
+            HintCornerTicks(frame: frame, color: accentColor, emphasized: state == .matched)
+        }
+    }
+}
+
+private struct HintCornerTicks: View {
+    let frame: CGRect
+    let color: Color
+    let emphasized: Bool
+
+    var body: some View {
+        let minEdge = min(frame.width, frame.height)
+        let tick = min(max(6, minEdge * 0.22), minEdge * 0.5)
+        let lineWidth = max(1.5, min(minEdge * 0.03, emphasized ? 3 : 2.4))
+
+        Path { path in
+            path.move(to: CGPoint(x: 0, y: tick))
+            path.addLine(to: CGPoint(x: 0, y: 0))
+            path.addLine(to: CGPoint(x: tick, y: 0))
+
+            path.move(to: CGPoint(x: frame.width - tick, y: 0))
+            path.addLine(to: CGPoint(x: frame.width, y: 0))
+            path.addLine(to: CGPoint(x: frame.width, y: tick))
+
+            path.move(to: CGPoint(x: frame.width, y: frame.height - tick))
+            path.addLine(to: CGPoint(x: frame.width, y: frame.height))
+            path.addLine(to: CGPoint(x: frame.width - tick, y: frame.height))
+
+            path.move(to: CGPoint(x: tick, y: frame.height))
+            path.addLine(to: CGPoint(x: 0, y: frame.height))
+            path.addLine(to: CGPoint(x: 0, y: frame.height - tick))
+        }
+        .stroke(
+            color.opacity(emphasized ? 0.95 : 0.85),
+            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+        )
+        .shadow(color: color.opacity(emphasized ? 0.55 : 0.35), radius: 6, x: 0, y: 0)
+        .frame(width: frame.width, height: frame.height)
+        .position(x: frame.midX, y: frame.midY)
+        .blendMode(.screen)
     }
 }
 
