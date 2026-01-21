@@ -92,12 +92,12 @@ public struct DetectionFilter: Sendable {
         var lowMid: [Detection] = []
 
         for detection in detections {
-            if detection.confidence > 0.80 {
+            if detection.confidence > 0.60 {
                 high.append(detection)
-            } else if detection.confidence >= 0.20 {
+            } else if detection.confidence >= 0.30 {
                 mid.append(detection)
             } else {
-                // 0.10 - 0.20 range (YOLO threshold is 0.15)
+                // 0.15 - 0.30 range (YOLO threshold is 0.15)
                 lowMid.append(detection)
             }
         }

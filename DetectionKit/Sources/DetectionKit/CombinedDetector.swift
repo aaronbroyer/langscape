@@ -128,15 +128,24 @@ public actor CombinedDetector: DetectionService {
 
         // Phase 2: Filter and Bucket YOLO detections
         let filtered = filter.filter(yoloDetections)
-        let candidates = filtered.all
-        let candidatesForVerification = candidates
-            .sorted(by: { qualityScore($0) > qualityScore($1) })
-            .prefix(16)
+        let autoAccepted = filtered.autoAccept
+        let candidates = filtered.needsVerification + filtered.requiresStrictGate
+        let candidatesForVerification = Array(
+            candidates
+                .sorted(by: { qualityScore($0) > qualityScore($1) })
+                .prefix(16)
+        )
         let needsVerifyCount = candidatesForVerification.count
-        await logger.log("CombinedDetector: Candidate detections after filter: \(candidates.count) (verifying \(needsVerifyCount))", level: .info, category: "DetectionKit.CombinedDetector")
+        let autoAcceptCount = autoAccepted.count
+        await logger.log(
+            "CombinedDetector: Candidate detections after filter: \(filtered.all.count) (auto-accept \(autoAcceptCount), verifying \(needsVerifyCount))",
+            level: .info,
+            category: "DetectionKit.CombinedDetector"
+        )
 
         var results: [Detection] = []
-        results.reserveCapacity(needsVerifyCount)
+        results.reserveCapacity(autoAcceptCount + needsVerifyCount)
+        results.append(contentsOf: autoAccepted)
 
         // Phase 3: VLM Referee Verification (for uncertain detections only)
         if refereeReady, let referee = referee, !candidatesForVerification.isEmpty {
@@ -144,11 +153,11 @@ public actor CombinedDetector: DetectionService {
             let pixelBuffer: CVPixelBuffer = request.pixelBuffer
             await logger.log("CombinedDetector: Verifying \(candidatesForVerification.count) YOLO detections with VLM Referee", level: .info, category: "DetectionKit.CombinedDetector")
             let verified = referee.filterBatch(
-                Array(candidatesForVerification),
+                candidatesForVerification,
                 pixelBuffer: pixelBuffer,
                 orientationRaw: request.imageOrientationRaw,
                 minConf: 0.15,
-                maxConf: 1.00,  // Verify high-confidence boxes too
+                maxConf: 0.60,  // Auto-accept high-confidence boxes
                 maxVerify: 200,  // Limit verification workload
                 earlyStopThreshold: 1000  // Stop when enough verified
             )
@@ -158,6 +167,20 @@ public actor CombinedDetector: DetectionService {
             } else {
                 results.append(contentsOf: verified)
                 await logger.log("CombinedDetector: VLM Referee kept \(verified.count)/\(candidatesForVerification.count) detections after verification", level: .info, category: "DetectionKit.CombinedDetector")
+
+                let totalAvailable = autoAcceptCount + candidatesForVerification.count
+                let minimumTarget = min(3, totalAvailable)
+                if results.count < minimumTarget {
+                    let verifiedIDs = Set(verified.map { $0.id })
+                    let backfill = candidatesForVerification
+                        .filter { !verifiedIDs.contains($0.id) }
+                        .sorted(by: { $0.confidence > $1.confidence })
+                        .prefix(minimumTarget - results.count)
+                    if !backfill.isEmpty {
+                        results.append(contentsOf: backfill)
+                        await logger.log("CombinedDetector: Backfilled \(backfill.count) unverified YOLO detections to reach \(minimumTarget) candidates", level: .info, category: "DetectionKit.CombinedDetector")
+                    }
+                }
             }
             #endif
         } else {

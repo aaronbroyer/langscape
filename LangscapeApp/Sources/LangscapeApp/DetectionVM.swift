@@ -107,6 +107,9 @@ final class DetectionVM: ObservableObject {
         overlay = nil
         liveObjectCount = 0
         state = .hunting
+        #if canImport(CoreVideo)
+        kickstartLiveDetection()
+        #endif
 
         Task { [objectDetector, liveDetector, logger] in
             _ = await objectDetector.loadContext(context)
@@ -270,6 +273,14 @@ final class DetectionVM: ObservableObject {
                 await logger.log("Live detection failed: \(error.localizedDescription)", level: .debug, category: "LangscapeApp.DetectionVM")
             }
         }
+    }
+
+    private func kickstartLiveDetection() {
+        guard state == .hunting else { return }
+        guard !liveInFlight else { return }
+        guard let buffer = currentPixelBuffer else { return }
+        lastLiveAttempt = .distantPast
+        processLiveFrame(buffer)
     }
 
     func captureAndScan() {
