@@ -34,6 +34,7 @@ let package = Package(
                 .copy("Resources/labelbank_en.txt"),
                 .copy("Resources/labelbank_en_curated.txt"),
                 .copy("Resources/labelbank_en_large.txt"),
+                .copy("Resources/labelbank_en_xlarge.txt"),
                 .copy("Resources/clip-vocab.json"),
                 .copy("Resources/clip-merges.txt"),
                 // YOLO-World context-specific models

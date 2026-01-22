@@ -104,8 +104,9 @@ public struct VLMReferee: @unchecked Sendable {
             pendingLogs.append(("Loaded MobileCLIP referee variant: \(variant)", .info, "DetectionKit.VLMReferee"))
 
             // Preload label bank and compute text embeddings for fast per-frame scoring
-            // Prefer the large bank for vocabulary coverage; fall back to curated if missing
-            let bankURL = resourceBundle.url(forResource: "labelbank_en_large", withExtension: "txt")
+            // Prefer the xlarge bank for maximum relabel coverage; fall back if missing
+            let bankURL = resourceBundle.url(forResource: "labelbank_en_xlarge", withExtension: "txt")
+                ?? resourceBundle.url(forResource: "labelbank_en_large", withExtension: "txt")
                 ?? resourceBundle.url(forResource: "labelbank_en_curated", withExtension: "txt")
                 ?? resourceBundle.url(forResource: "labelbank_en", withExtension: "txt")
             if let url = bankURL, let txt = try? String(contentsOf: url) {
