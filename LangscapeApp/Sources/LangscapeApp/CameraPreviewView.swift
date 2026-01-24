@@ -7,6 +7,7 @@ import GameKitLS
 import UIComponents
 import DesignSystem
 import Utilities
+import Dispatch
 
 #if canImport(UIKit)
 import UIKit
@@ -841,6 +842,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
     private weak var arView: ARView?
     private var lastFrameTime: TimeInterval = 0
     private let captureInterval: TimeInterval = 0.08
+    private let frameSemaphore = DispatchSemaphore(value: 1)
     private let logger = Logger.shared
 
     var isFrameProcessingEnabled: Bool = false
@@ -869,11 +871,21 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
 
         let now = frame.timestamp
         guard now - lastFrameTime >= captureInterval else { return }
+        guard frameSemaphore.wait(timeout: .now()) == .success else { return }
         lastFrameTime = now
 
         let capturedImage = frame.capturedImage
+        guard let pixelBuffer = clonePixelBuffer(capturedImage) else {
+            frameSemaphore.signal()
+            Task { await logger.log("Camera pipeline dropped a frame because the pixel buffer could not be cloned.", level: .warning, category: "LangscapeApp.Camera") }
+            return
+        }
+        let inputSize = CGSize(width: CGFloat(CVPixelBufferGetWidth(pixelBuffer)), height: CGFloat(CVPixelBufferGetHeight(pixelBuffer)))
+
         let logger = logger
+        let semaphore = frameSemaphore
         Task(priority: .userInitiated) { [weak self] in
+            defer { semaphore.signal() }
             guard let self else { return }
 
             #if canImport(UIKit) && canImport(ImageIO)
@@ -883,17 +895,11 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             let interfaceOrientation = UIInterfaceOrientation(rawValue: orientationRawValue) ?? .portrait
             let exifOrientation = exifOrientationForBackCamera(interfaceOrientation)
             let orientationRaw = exifOrientation.rawValue
-            let inputSize = CGSize(width: CGFloat(CVPixelBufferGetWidth(capturedImage)), height: CGFloat(CVPixelBufferGetHeight(capturedImage)))
             let orientedInputSize = orientedSize(inputSize, for: exifOrientation)
             #else
             let orientationRaw: UInt32? = nil
-            let orientedInputSize = CGSize(width: CGFloat(CVPixelBufferGetWidth(capturedImage)), height: CGFloat(CVPixelBufferGetHeight(capturedImage)))
+            let orientedInputSize = inputSize
             #endif
-
-            guard let pixelBuffer = clonePixelBuffer(capturedImage) else {
-                await logger.log("Camera pipeline dropped a frame because the pixel buffer could not be cloned.", level: .warning, category: "LangscapeApp.Camera")
-                return
-            }
 
             await MainActor.run {
                 viewModel.handleFrame(pixelBuffer, orientationRaw: orientationRaw, orientedInputSize: orientedInputSize)
