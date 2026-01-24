@@ -7,7 +7,7 @@ import CoreML
 public typealias Language = Utilities.Language
 
 #if canImport(CoreML)
-public struct CoreMLTranslator: @unchecked Sendable {
+public struct CoreMLTranslator: TranslationProviding, @unchecked Sendable {
     public enum Error: Swift.Error { case modelNotFound, predictionFailed(String) }
 
     private let model: MLModel
@@ -57,7 +57,7 @@ public struct CoreMLTranslator: @unchecked Sendable {
 }
 
 #else
-public struct CoreMLTranslator: @unchecked Sendable {
+public struct CoreMLTranslator: TranslationProviding, @unchecked Sendable {
     public func supports(source: Language, target: Language) -> Bool { false }
     public func translate(_ text: String, from source: Language, to target: Language) async throws -> String { text }
     public init(bundle: Bundle, manifest: Any, logger: Logger) throws {}

@@ -17,25 +17,22 @@ public struct Published<Value> {
 public enum LanguagePreference: String, CaseIterable, Identifiable, Codable, Sendable {
     case englishToSpanish
     case spanishToEnglish
+    case englishToFrench
+    case frenchToEnglish
+    case spanishToFrench
+    case frenchToSpanish
 
     public var id: String { rawValue }
 
     public var title: String {
-        switch self {
-        case .englishToSpanish:
-            return "English → Spanish"
-        case .spanishToEnglish:
-            return "Spanish → English"
-        }
+        "\(sourceLanguage.displayName) → \(targetLanguage.displayName)"
     }
 
     public var detail: String {
-        switch self {
-        case .englishToSpanish:
-            return "Learn Spanish names for what you discover."
-        case .spanishToEnglish:
-            return "Translate familiar Spanish words into English."
+        if sourceLanguage == .english {
+            return "Learn \(targetLanguage.displayName) names for what you discover."
         }
+        return "Translate familiar \(sourceLanguage.displayName) words into \(targetLanguage.displayName)."
     }
 }
 

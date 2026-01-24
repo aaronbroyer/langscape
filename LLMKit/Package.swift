@@ -13,13 +13,15 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(path: "../Utilities")
+        .package(path: "../Utilities"),
+        .package(url: "https://github.com/jkrukowski/swift-sentencepiece", branch: "main")
     ],
     targets: [
         .target(
             name: "LLMKit",
             dependencies: [
-                "Utilities"
+                "Utilities",
+                .product(name: "SentencepieceTokenizer", package: "swift-sentencepiece")
             ],
             resources: [
                 .process("Resources")

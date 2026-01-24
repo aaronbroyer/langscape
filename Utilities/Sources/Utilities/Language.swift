@@ -3,6 +3,7 @@ import Foundation
 public enum Language: String, Codable, CaseIterable, Sendable {
     case english
     case spanish
+    case french
 
     public var displayName: String {
         switch self {
@@ -10,6 +11,8 @@ public enum Language: String, Codable, CaseIterable, Sendable {
             return "English"
         case .spanish:
             return "Spanish"
+        case .french:
+            return "French"
         }
     }
 }
@@ -21,6 +24,14 @@ public extension LanguagePreference {
             return .english
         case .spanishToEnglish:
             return .spanish
+        case .englishToFrench:
+            return .english
+        case .frenchToEnglish:
+            return .french
+        case .spanishToFrench:
+            return .spanish
+        case .frenchToSpanish:
+            return .french
         }
     }
 
@@ -30,6 +41,14 @@ public extension LanguagePreference {
             return .spanish
         case .spanishToEnglish:
             return .english
+        case .englishToFrench:
+            return .french
+        case .frenchToEnglish:
+            return .english
+        case .spanishToFrench:
+            return .french
+        case .frenchToSpanish:
+            return .spanish
         }
     }
 }

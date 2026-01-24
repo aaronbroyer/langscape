@@ -56,33 +56,31 @@ public actor LabelEngine: LabelProviding {
         let sourceLanguage = preference.sourceLanguage
         let targetLanguage = preference.targetLanguage
         let sourceText: String
+        let effectiveSource: Language
 
         if sourceLanguage == .english {
             sourceText = className
-        } else if let entry = await vocabularyStore.entry(for: className) {
-            sourceText = entry.spanish
+            effectiveSource = .english
+        } else if let entry = await vocabularyStore.entry(for: className),
+                  let localized = entry.text(for: sourceLanguage) {
+            sourceText = localized
+            effectiveSource = sourceLanguage
         } else {
             sourceText = className
+            effectiveSource = .english
         }
 
         do {
-            let translated = try await llmService.translate(sourceText, from: sourceLanguage, to: targetLanguage)
+            let translated = try await llmService.translate(sourceText, from: effectiveSource, to: targetLanguage)
             cache[key] = translated
-            Task { await logger.log("LLM translated \(sourceText) (\(sourceLanguage.rawValue)->\(targetLanguage.rawValue)) -> \(translated)", level: .debug, category: "GameKitLS.LabelEngine") }
+            Task { await logger.log("LLM translated \(sourceText) (\(effectiveSource.rawValue)->\(targetLanguage.rawValue)) -> \(translated)", level: .debug, category: "GameKitLS.LabelEngine") }
             return translated
         } catch {
-            let fallback: String
-            switch preference {
-            case .englishToSpanish:
-                fallback = "el/la \(className.lowercased())"
-            case .spanishToEnglish:
-                fallback = "the \(className.lowercased())"
-            }
-
+            let fallback = sourceText
             cache[key] = fallback
             Task {
                 await logger.log(
-                    "Falling back to heuristic translation for \(className): \(error.localizedDescription)",
+                    "Translation unavailable for \(className): \(error.localizedDescription)",
                     level: .warning,
                     category: "GameKitLS.LabelEngine"
                 )

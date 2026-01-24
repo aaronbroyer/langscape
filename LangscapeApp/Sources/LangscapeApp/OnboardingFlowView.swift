@@ -26,8 +26,8 @@ struct OnboardingFlowView: View {
                 OnboardingLanguageSelectionScreen(
                     targetLanguage: viewModel.targetLanguage,
                     nativeLanguage: viewModel.nativeLanguage,
-                    onTapTargetLanguage: { viewModel.setTargetLanguage(viewModel.targetLanguage.opposite) },
-                    onTapNativeLanguage: { viewModel.setNativeLanguage(viewModel.nativeLanguage.opposite) },
+                    onTapTargetLanguage: { viewModel.cycleTargetLanguage() },
+                    onTapNativeLanguage: { viewModel.cycleNativeLanguage() },
                     onContinue: { viewModel.continueFromLanguageSelection() },
                     onNotNow: { viewModel.skipLanguageSelection() }
                 )

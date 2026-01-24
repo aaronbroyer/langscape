@@ -30,8 +30,7 @@ __pycache__/
 Scripts/tmp/
 
 # Local translation exports (generated, not shipped)
-LLMKit/Resources/hf_*/
-LLMKit/Resources/marian_*/
+LLMKit/Sources/LLMKit/Resources/hf_*/
 
 
 datasets/openimages/
@@ -43,3 +42,7 @@ OID/csv_folder/train-annotations-bbox.csv
 
 *.mlpackage
 *.mlmodelc
+
+# Ship Opus-MT CoreML bundles
+!LLMKit/Sources/LLMKit/Resources/marian_*.mlpackage/
+!LLMKit/Sources/LLMKit/Resources/marian_*.mlpackage/**

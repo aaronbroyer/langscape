@@ -19,6 +19,7 @@ final class OnboardingViewModel: ObservableObject {
     enum Language: String, CaseIterable, Identifiable, Equatable {
         case english
         case spanish
+        case french
 
         var id: String { rawValue }
 
@@ -28,6 +29,8 @@ final class OnboardingViewModel: ObservableObject {
                 return "English"
             case .spanish:
                 return "Spanish"
+            case .french:
+                return "French"
             }
         }
 
@@ -37,16 +40,18 @@ final class OnboardingViewModel: ObservableObject {
                 return "🇺🇸"
             case .spanish:
                 return "🇪🇸"
+            case .french:
+                return "🇫🇷"
             }
         }
 
-        var opposite: Language {
-            switch self {
-            case .english:
-                return .spanish
-            case .spanish:
-                return .english
+        func next(excluding excluded: Language) -> Language {
+            let options = Language.allCases.filter { $0 != excluded }
+            guard let currentIndex = options.firstIndex(of: self) else {
+                return options.first ?? self
             }
+            let nextIndex = options.index(after: currentIndex)
+            return nextIndex == options.endIndex ? options[options.startIndex] : options[nextIndex]
         }
     }
 
@@ -88,12 +93,24 @@ final class OnboardingViewModel: ObservableObject {
 
     func setTargetLanguage(_ language: Language) {
         targetLanguage = language
-        nativeLanguage = language.opposite
+        if targetLanguage == nativeLanguage {
+            nativeLanguage = nativeLanguage.next(excluding: targetLanguage)
+        }
     }
 
     func setNativeLanguage(_ language: Language) {
         nativeLanguage = language
-        targetLanguage = language.opposite
+        if targetLanguage == nativeLanguage {
+            targetLanguage = targetLanguage.next(excluding: nativeLanguage)
+        }
+    }
+
+    func cycleTargetLanguage() {
+        targetLanguage = targetLanguage.next(excluding: nativeLanguage)
+    }
+
+    func cycleNativeLanguage() {
+        nativeLanguage = nativeLanguage.next(excluding: targetLanguage)
     }
 
     func continueFromLanguageSelection() {
@@ -148,6 +165,14 @@ final class OnboardingViewModel: ObservableObject {
             return (target: .spanish, native: .english)
         case .spanishToEnglish:
             return (target: .english, native: .spanish)
+        case .englishToFrench:
+            return (target: .french, native: .english)
+        case .frenchToEnglish:
+            return (target: .english, native: .french)
+        case .spanishToFrench:
+            return (target: .french, native: .spanish)
+        case .frenchToSpanish:
+            return (target: .spanish, native: .french)
         }
     }
 
@@ -157,6 +182,14 @@ final class OnboardingViewModel: ObservableObject {
             return .englishToSpanish
         case (.english, .spanish):
             return .spanishToEnglish
+        case (.french, .english):
+            return .englishToFrench
+        case (.english, .french):
+            return .frenchToEnglish
+        case (.french, .spanish):
+            return .spanishToFrench
+        case (.spanish, .french):
+            return .frenchToSpanish
         default:
             // Default to a supported pair if a caller sets an invalid combination.
             return .englishToSpanish

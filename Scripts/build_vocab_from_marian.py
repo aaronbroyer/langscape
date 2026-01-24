@@ -8,8 +8,8 @@ Outputs VocabStore/Resources/vocab-es-en.json with entries:
 Usage:
   source .venv-llm/bin/activate
   python Scripts/build_vocab_from_marian.py \
-      --en-es LLMKit/Resources/hf_en_es \
-      --es-en LLMKit/Resources/hf_es_en \
+      --en-es LLMKit/Sources/LLMKit/Resources/hf_en_es \
+      --es-en LLMKit/Sources/LLMKit/Resources/hf_es_en \
       --out VocabStore/Resources/vocab-es-en.json
 """
 import argparse

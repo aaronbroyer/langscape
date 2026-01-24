@@ -7,25 +7,33 @@ public actor VocabularyStore {
         public let className: String
         public let english: String
         public let spanish: String
+        public let french: String?
 
-        public init(id: UUID = UUID(), className: String, english: String, spanish: String) {
+        public init(id: UUID = UUID(), className: String, english: String, spanish: String, french: String? = nil) {
             self.id = id
             self.className = className
             self.english = english
             self.spanish = spanish
+            self.french = french
         }
 
         fileprivate var normalizedClassName: String {
             className.normalizedKey()
         }
 
-        public func translation(for preference: LanguagePreference) -> String {
-            switch preference {
-            case .englishToSpanish:
-                return spanish
-            case .spanishToEnglish:
+        public func text(for language: Language) -> String? {
+            switch language {
+            case .english:
                 return english
+            case .spanish:
+                return spanish
+            case .french:
+                return french
             }
+        }
+
+        public func translation(for preference: LanguagePreference) -> String? {
+            text(for: preference.targetLanguage)
         }
     }
 
@@ -34,6 +42,7 @@ public actor VocabularyStore {
             let className: String
             let english: String
             let spanish: String
+            let french: String?
         }
 
         let items: [Item]
@@ -94,7 +103,7 @@ public actor VocabularyStore {
             let data = try Data(contentsOf: url)
             let rawDataset = try JSONDecoder().decode(RawDataset.self, from: data)
             let entries = rawDataset.items.map { item in
-                Entry(className: item.className, english: item.english, spanish: item.spanish)
+                Entry(className: item.className, english: item.english, spanish: item.spanish, french: item.french)
             }
 
             Task { await logger.log("Loaded \(entries.count) vocabulary entries", level: .info, category: "VocabStore") }
