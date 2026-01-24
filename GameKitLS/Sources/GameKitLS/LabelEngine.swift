@@ -1,6 +1,5 @@
 import Foundation
 import Utilities
-import VocabStore
 import LLMKit
 
 public protocol LabelProviding: Sendable {
@@ -13,17 +12,14 @@ public actor LabelEngine: LabelProviding {
         let preference: LanguagePreference
     }
 
-    private let vocabularyStore: VocabularyStore
     private let llmService: any LLMServiceProtocol
     private let logger: Logger
     private var cache: [CacheKey: String]
 
     public init(
-        vocabularyStore: VocabularyStore = VocabularyStore(),
         llmService: any LLMServiceProtocol = LLMService(),
         logger: Logger = .shared
     ) {
-        self.vocabularyStore = vocabularyStore
         self.llmService = llmService
         self.logger = logger
         self.cache = [:]
@@ -47,27 +43,13 @@ public actor LabelEngine: LabelProviding {
             return cached
         }
 
-        if let direct = await vocabularyStore.translation(for: className, preference: preference) {
-            cache[key] = direct
-            Task { await logger.log("Vocab hit for \(className) -> \(direct)", level: .debug, category: "GameKitLS.LabelEngine") }
-            return direct
-        }
-
-        let sourceLanguage = preference.sourceLanguage
         let targetLanguage = preference.targetLanguage
-        let sourceText: String
-        let effectiveSource: Language
+        let sourceText = className
+        let effectiveSource: Language = .english
 
-        if sourceLanguage == .english {
-            sourceText = className
-            effectiveSource = .english
-        } else if let entry = await vocabularyStore.entry(for: className),
-                  let localized = entry.text(for: sourceLanguage) {
-            sourceText = localized
-            effectiveSource = sourceLanguage
-        } else {
-            sourceText = className
-            effectiveSource = .english
+        if targetLanguage == .english {
+            cache[key] = sourceText
+            return sourceText
         }
 
         do {

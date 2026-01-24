@@ -36,7 +36,7 @@ This writes Ultralytics/YOLO‑format labels under `ovd-data/labels` with canoni
 ```
 python Scripts/ovd/ovd_generate.py --clean ovd-data --min-area 0.006 --max-aspect 4.0 --merge-iou 0.6
 ```
-This pass merges duplicates, rejects tiny/odd boxes, and normalizes synonyms to match `VocabStore`.
+This pass merges duplicates, rejects tiny/odd boxes, and normalizes synonyms to match your canonical class names.
 
 ## 4) Train YOLO student on pseudo‑labels
 ```
@@ -62,8 +62,7 @@ python Scripts/ovd/ovd_export_coreml.py \
 The iOS app will auto‑prefer this package (the loader checks multiple common names).
 
 ## 6) Integrate with translations
-- Update `VocabStore` aliases if you add long‑tail class names so they map to canonical English keys.
-- Add Spanish strings to `VocabStore/Resources/vocab-es-en.json` for the most common long‑tail nouns.
+- Ensure new class names are handled by the on‑device Marian translators or add a translation fallback strategy.
 
 ## Model picks
 - Fastest path: OWL‑ViT (HF Transformers) — simple install; good zero‑shot.
@@ -73,4 +72,3 @@ The iOS app will auto‑prefer this package (the loader checks multiple common n
 - Start with ~3–5k images across your environments; more variety → better student.
 - Evaluate with `yolo val` on a small held‑out set you hand‑label.
 - Keep Core ML export at 896–1024 for accuracy; choose m or l according to latency/size targets.
-

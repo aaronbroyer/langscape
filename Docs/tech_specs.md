@@ -54,10 +54,7 @@ Langscape.xcworkspace
 │  │  │  ├─ Logger.swift
 │  │  │  ├─ AppSettings.swift
 │  │  │  └─ Geometry+Ext.swift
-│  └─ VocabStore/            # Static vocab (JSON) + loader
-│     ├─ Sources/VocabStore/
-│     │  ├─ VocabStore.swift
-│     │  └─ Resources/vocab_es.json
+│  └─ LLMKit/                # Translation service + local Marian models
 └─ Config/
    ├─ SwiftLint.yml
    ├─ SwiftFormat/.swiftformat
@@ -86,13 +83,9 @@ public protocol ObjectDetectionService {
 public protocol LLMServiceProtocol {
   func translate(_ english: String, to target: Language) async throws -> String
 }
-
-public protocol VocabProviding {
-  func loadVocab(for language: Language) throws -> [VocabItem]
-}
 ```
-- Concrete implementations live in `DetectionKit`, `LLMKit`, and `VocabStore`.
-- `LabelEngine` (in `GameKitLS`) orchestrates rounds from detected objects + vocab rules.
+- Concrete implementations live in `DetectionKit` and `LLMKit`.
+- `LabelEngine` (in `GameKitLS`) orchestrates rounds from detected objects + translation rules.
 
 ---
 
@@ -106,7 +99,7 @@ public protocol VocabProviding {
 
 ## 6) Resources
 - **Models bundled in packages** (`.mlmodelc`, quantized LLM file).
-- **Vocab JSON** (50 classes, Spanish nouns with articles + diacritics).
+- **Translation assets** (Marian CoreML models, tokenizers, vocab JSON).
 - **Assets:** logo (PDF vector), icons (SF Symbols where possible).
 
 ---
@@ -214,4 +207,4 @@ fi
 ---
 
 ### TL;DR
-Use MVVM with clear SwiftPM modules: DetectionKit, LLMKit, GameKitLS, UIComponents, DesignSystem, Utilities, VocabStore. Enforce lint/format, script checks, and keep the app target thin.
+Use MVVM with clear SwiftPM modules: DetectionKit, LLMKit, GameKitLS, UIComponents, DesignSystem, Utilities. Enforce lint/format, script checks, and keep the app target thin.

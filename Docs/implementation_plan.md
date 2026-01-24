@@ -5,7 +5,7 @@ This roadmap transforms the product vision into iterative sprints that surface a
 ## Sprint 0 – Workspace, Tooling, and Design System Scaffold (Week 1)
 **Objective:** Establish modular foundations, shared design tokens, and CI hooks so subsequent feature work proceeds smoothly.
 
-- Initialize `Langscape.xcworkspace` with the App target plus Swift Packages (`DetectionKit`, `GameKitLS`, `UIComponents`, `DesignSystem`, `Utilities`, `VocabStore`, `LLMKit`) wired through Swift Package Manager, matching the technical spec module layout.
+- Initialize `Langscape.xcworkspace` with the App target plus Swift Packages (`DetectionKit`, `GameKitLS`, `UIComponents`, `DesignSystem`, `Utilities`, `LLMKit`) wired through Swift Package Manager, matching the technical spec module layout.
 - Add repository-wide configuration assets: SwiftLint/SwiftFormat configs, layered `.xcconfig` files, pre-build scripts (`prebuild_lint.sh`, `verify_models.sh`), and placeholder resource folders.
 - Implement the design system scaffold (core palette, typography, spacing constants) and previewable SwiftUI components to validate the light-mode visual language.
 - Create shared utilities (logging facade, local error store, app settings wrapper) to support later error handling requirements.
@@ -40,7 +40,7 @@ This roadmap transforms the product vision into iterative sprints that surface a
 ## Sprint 4 – Language Assets, LLM Integration, and Vocab Accuracy (Week 5)
 **Objective:** Replace placeholder content with real bilingual assets and offline language services while preserving UI/UX details from mockups and user flows.
 
-- Populate `VocabStore` with the Spanish↔English datasets, ensuring articles/diacritics appear exactly as in the PRD and mockups.
+- Bundle the Marian translation assets in `LLMKit` (models + tokenizers + vocab) and validate accuracy for common nouns.
 - Implement `LLMService` in `LLMKit` with caching, bundled model checks, and deterministic fallbacks to stay offline-only.
 - Update `LabelEngine` to pull localized labels per the selected language and detection classes, adhering to the floating label positioning defined in the mockups.
 - Expand tests covering vocab loading, language switching, and label rendering, including offline verification paths.

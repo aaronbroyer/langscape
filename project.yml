@@ -10,8 +10,6 @@ packages:
     path: DetectionKit
   GameKitLS:
     path: GameKitLS
-  VocabStore:
-    path: VocabStore
   LLMKit:
     path: LLMKit
 
@@ -58,8 +56,6 @@ targets:
         product: DetectionKit
       - package: GameKitLS
         product: GameKitLS
-      - package: VocabStore
-        product: VocabStore
       - package: LLMKit
         product: LLMKit
     settings:

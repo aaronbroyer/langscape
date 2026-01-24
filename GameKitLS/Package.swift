@@ -15,7 +15,6 @@ let package = Package(
     dependencies: [
         .package(path: "../Utilities"),
         .package(path: "../DetectionKit"),
-        .package(path: "../VocabStore"),
         .package(path: "../LLMKit")
     ],
     targets: [
@@ -24,7 +23,6 @@ let package = Package(
             dependencies: [
                 "Utilities",
                 "DetectionKit",
-                "VocabStore",
                 "LLMKit"
             ],
             resources: [

@@ -85,8 +85,7 @@ python Scripts/ovd/ovd_generate.py \
   --clean ovd-data \
   --min-area 0.006 \
   --max-aspect 4.0 \
-  --merge-iou 0.6 \
-  --alias-map VocabStore/Resources/aliases.json
+  --merge-iou 0.6
 ```
 This merges overlapping boxes, removes tiny artifacts, and aligns synonyms with the canonical vocabulary used throughout the app.
 
@@ -160,7 +159,7 @@ Follow the high-scale detection design doc (`Docs/2025-11-08-high-scale-detectio
 3. Skip MobileCLIP for boxes above 0.60 confidence to preserve throughput.
 
 ## 10. Refresh Vocabulary and Translations
-- Map any new English labels to canonical keys in `VocabStore/Resources/aliases.json`.
+- Map any new English labels to your canonical class names so they stay consistent across detectors and UI.
 - Let `LLMService` translate missing terms once, then cache them for gameplay.
 
 ## 11. Validate and Iterate
