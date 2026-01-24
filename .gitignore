@@ -12,6 +12,8 @@ xcuserdata/
 .env
 SegmentationKit/Sources/SegmentationKit/Resources/.cache/
 
+Agents.md
+
 # Ultralytics exports at repo root 
 /yolov8*.pt
 /yolov8*.mlpackage/
