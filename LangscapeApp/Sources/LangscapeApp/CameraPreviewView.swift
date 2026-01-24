@@ -874,16 +874,16 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         guard frameSemaphore.wait(timeout: .now()) == .success else { return }
         lastFrameTime = now
 
+        let logger = logger
+        let semaphore = frameSemaphore
         let capturedImage = frame.capturedImage
         guard let pixelBuffer = clonePixelBuffer(capturedImage) else {
-            frameSemaphore.signal()
+            semaphore.signal()
             Task { await logger.log("Camera pipeline dropped a frame because the pixel buffer could not be cloned.", level: .warning, category: "LangscapeApp.Camera") }
             return
         }
         let inputSize = CGSize(width: CGFloat(CVPixelBufferGetWidth(pixelBuffer)), height: CGFloat(CVPixelBufferGetHeight(pixelBuffer)))
 
-        let logger = logger
-        let semaphore = frameSemaphore
         Task(priority: .userInitiated) { [weak self] in
             defer { semaphore.signal() }
             guard let self else { return }
