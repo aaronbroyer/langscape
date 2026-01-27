@@ -449,7 +449,7 @@ private struct SnapshotRoundPlayLayer: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             ZStack {
                 ForEach(placedLabelOverlays, id: \.label.id) { entry in
                     StickyLabelOverlay(text: entry.label.text, frame: entry.frame)
@@ -512,6 +512,7 @@ private struct SnapshotRoundPlayLayer: View {
                             .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 6)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.top, 50)
                 .padding(.horizontal, Spacing.large.cgFloat)
             }
