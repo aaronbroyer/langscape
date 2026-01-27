@@ -495,6 +495,7 @@ private struct SnapshotRoundPlayLayer: View {
                 .padding(.horizontal, Spacing.large.cgFloat)
                 .padding(.bottom, Spacing.xLarge.cgFloat)
             }
+            .frame(maxWidth: .infinity)
 
             if interactive {
                 HStack(spacing: Spacing.small.cgFloat) {
