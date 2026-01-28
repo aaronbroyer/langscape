@@ -1,5 +1,8 @@
 import Foundation
 import Utilities
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 #if canImport(CoreML)
 import CoreML
@@ -54,6 +57,7 @@ public actor YOLOInterpreter: DetectionService {
     private var maxDetections: Int = 5000
     private var isPrepared = false
     private var currentModelName: String?
+    private var modelInputSize: CGSize?
 
     // NMS thresholds passed to the model (not client-side filtering)
     public let modelConfidenceThreshold: Double
@@ -67,6 +71,10 @@ public actor YOLOInterpreter: DetectionService {
         self.logger = logger
         self.modelConfidenceThreshold = confidenceThreshold
         self.modelIouThreshold = iouThreshold
+    }
+
+    public func modelInputSize() async -> CGSize? {
+        modelInputSize
     }
 
     // MARK: - Lifecycle
@@ -253,6 +261,9 @@ public actor YOLOInterpreter: DetectionService {
 
         if let imageInput = mlModel.modelDescription.inputDescriptionsByName.first(where: { $0.value.type == .image })?.key {
             visionModel.inputImageFeatureName = imageInput
+            if let constraint = mlModel.modelDescription.inputDescriptionsByName[imageInput]?.imageConstraint {
+                modelInputSize = CGSize(width: constraint.pixelsWide, height: constraint.pixelsHigh)
+            }
         }
 
         backend = .vision(model: visionModel)

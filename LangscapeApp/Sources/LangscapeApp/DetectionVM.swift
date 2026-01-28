@@ -34,6 +34,7 @@ final class DetectionVM: ObservableObject {
     @Published var liveObjectCount: Int = 0
     @Published var snapshot: UIImage?
     @Published var snapshotImageSize: CGSize?
+    @Published var modelInputSize: CGSize?
     @Published var round: Round?
     @Published var placedLabels: Set<GameKitLS.Label.ID> = []
     @Published var lastIncorrectLabelID: GameKitLS.Label.ID?
@@ -86,6 +87,7 @@ final class DetectionVM: ObservableObject {
         liveObjectCount = 0
         snapshot = nil
         snapshotImageSize = nil
+        modelInputSize = nil
         round = nil
         placedLabels = []
         lastIncorrectLabelID = nil
@@ -194,6 +196,7 @@ final class DetectionVM: ObservableObject {
         await MainActor.run {
             snapshot = nil
             snapshotImageSize = nil
+            modelInputSize = nil
             round = nil
             placedLabels = []
             lastIncorrectLabelID = nil
@@ -304,6 +307,7 @@ final class DetectionVM: ObservableObject {
             guard let self else { return }
             do {
                 try await objectDetector.prepare()
+                let detectorInputSize = await objectDetector.modelInputSize()
                 let request = DetectionRequest(pixelBuffer: currentBuffer, imageOrientationRaw: orientationRaw)
                 let detections = try await objectDetector.detect(on: request)
 
@@ -325,6 +329,7 @@ final class DetectionVM: ObservableObject {
                 }
 
                 await MainActor.run {
+                    self.modelInputSize = detectorInputSize
                     self.round = round
                     self.placedLabels = []
                     self.lastIncorrectLabelID = nil

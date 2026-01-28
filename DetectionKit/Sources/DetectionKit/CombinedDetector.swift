@@ -1,5 +1,8 @@
 import Foundation
 import Utilities
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 #if canImport(CoreVideo)
 import CoreVideo
@@ -86,6 +89,10 @@ public actor CombinedDetector: DetectionService {
             await logger.log("CombinedDetector: Failed to load context '\(contextName)': \(error.localizedDescription)", level: .error, category: "DetectionKit.CombinedDetector")
             return false
         }
+    }
+
+    public func modelInputSize() async -> CGSize? {
+        await yolo.modelInputSize()
     }
 
     public func detect(on request: DetectionRequest) async throws -> [Detection] {
