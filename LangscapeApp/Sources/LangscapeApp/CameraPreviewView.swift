@@ -82,6 +82,8 @@ struct CameraPreviewView: View {
                         .allowsHitTesting(false)
                 }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipped()
             .coordinateSpace(name: "experience")
             .background(Color.black)
             .onChange(of: scenePhase) { _, phase in
@@ -292,18 +294,19 @@ struct CameraPreviewView: View {
     @ViewBuilder
     private func playingOverlay(in size: CGSize) -> some View {
         if let round = viewModel.round {
-            SnapshotRoundPlayLayer(
-                round: round,
-                placedLabels: viewModel.placedLabels,
-                lastIncorrectLabelID: viewModel.lastIncorrectLabelID,
-                interactive: !viewModel.isPaused,
-                parallaxOffset: parallaxOffset,
-                frameProvider: { object in boundingRect(for: object, in: size) },
-                attemptMatch: viewModel.attemptMatch(labelID:on:),
-                onPause: viewModel.pause,
-                showHints: viewModel.showIdentifiedObjectsHint,
-                onToggleHints: viewModel.toggleIdentifiedObjectsHint
-            )
+                SnapshotRoundPlayLayer(
+                    round: round,
+                    placedLabels: viewModel.placedLabels,
+                    lastIncorrectLabelID: viewModel.lastIncorrectLabelID,
+                    interactive: !viewModel.isPaused,
+                    parallaxOffset: parallaxOffset,
+                    viewSize: size,
+                    frameProvider: { object in boundingRect(for: object, in: size) },
+                    attemptMatch: viewModel.attemptMatch(labelID:on:),
+                    onPause: viewModel.pause,
+                    showHints: viewModel.showIdentifiedObjectsHint,
+                    onToggleHints: viewModel.toggleIdentifiedObjectsHint
+                )
         }
     }
 
@@ -424,6 +427,7 @@ private struct SnapshotRoundPlayLayer: View {
     let lastIncorrectLabelID: GameKitLS.Label.ID?
     let interactive: Bool
     let parallaxOffset: CGSize
+    let viewSize: CGSize
     let frameProvider: (DetectedObject) -> CGRect
     let attemptMatch: (GameKitLS.Label.ID, UUID) -> LabelScrambleVM.MatchResult
     let onPause: () -> Void
@@ -449,6 +453,9 @@ private struct SnapshotRoundPlayLayer: View {
     }
 
     var body: some View {
+        let horizontalPadding = Spacing.large.cgFloat
+        let maxPanelWidth = max(0, viewSize.width - (horizontalPadding * 2))
+
         ZStack {
             ZStack {
                 ForEach(placedLabelOverlays, id: \.label.id) { entry in
@@ -492,7 +499,8 @@ private struct SnapshotRoundPlayLayer: View {
                     .padding(.top, Spacing.small.cgFloat)
                     .padding(.bottom, Spacing.small.cgFloat)
                 }
-                .padding(.horizontal, Spacing.large.cgFloat)
+                .frame(width: maxPanelWidth)
+                .padding(.horizontal, horizontalPadding)
                 .padding(.bottom, Spacing.xLarge.cgFloat)
             }
             .frame(maxWidth: .infinity)
