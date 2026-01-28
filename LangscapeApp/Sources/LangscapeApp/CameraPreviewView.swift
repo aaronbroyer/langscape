@@ -69,7 +69,6 @@ struct CameraPreviewView: View {
 
                 if showsHintLayer, let round = viewModel.round {
                     hintBoxesLayer(for: round, in: proxy.size)
-                        .offset(parallaxOffset)
                         .allowsHitTesting(false)
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
@@ -414,7 +413,8 @@ struct CameraPreviewView: View {
     }
 
     private func boundingRect(for object: DetectedObject, in viewSize: CGSize) -> CGRect {
-        if let mapped = projectedRect(for: object.boundingBox, inputImageSize: viewModel.inputImageSize, viewSize: viewSize) {
+        let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
+        if let mapped = projectedRect(for: object.boundingBox, inputImageSize: sourceSize, viewSize: viewSize) {
             return mapped
         }
         return object.boundingBox.rect(in: viewSize)
@@ -968,7 +968,9 @@ private func projectedRect(
     let y = cameraRect.origin.y + CGFloat(normalizedRect.origin.y) * dh
     let w = CGFloat(normalizedRect.size.width) * dw
     let h = CGFloat(normalizedRect.size.height) * dh
-    return CGRect(x: x, y: y, width: w, height: h)
+    let rect = CGRect(x: x, y: y, width: w, height: h)
+    let clamped = rect.intersection(cameraRect)
+    return clamped.isNull ? rect : clamped
 }
 
 private func projectedCameraFrameRect(inputImageSize: CGSize?, viewSize: CGSize) -> CGRect? {

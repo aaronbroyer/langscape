@@ -33,6 +33,7 @@ final class DetectionVM: ObservableObject {
     @Published var detectedContext: String?
     @Published var liveObjectCount: Int = 0
     @Published var snapshot: UIImage?
+    @Published var snapshotImageSize: CGSize?
     @Published var round: Round?
     @Published var placedLabels: Set<GameKitLS.Label.ID> = []
     @Published var lastIncorrectLabelID: GameKitLS.Label.ID?
@@ -84,6 +85,7 @@ final class DetectionVM: ObservableObject {
         detectedContext = nil
         liveObjectCount = 0
         snapshot = nil
+        snapshotImageSize = nil
         round = nil
         placedLabels = []
         lastIncorrectLabelID = nil
@@ -191,6 +193,7 @@ final class DetectionVM: ObservableObject {
         try? await Task.sleep(nanoseconds: 900_000_000)
         await MainActor.run {
             snapshot = nil
+            snapshotImageSize = nil
             round = nil
             placedLabels = []
             lastIncorrectLabelID = nil
@@ -347,6 +350,7 @@ final class DetectionVM: ObservableObject {
         guard let cg = context.createCGImage(oriented, from: oriented.extent) else { return }
         await MainActor.run {
             self.snapshot = UIImage(cgImage: cg)
+            self.snapshotImageSize = CGSize(width: cg.width, height: cg.height)
         }
     }
 
