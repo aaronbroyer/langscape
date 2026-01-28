@@ -506,22 +506,27 @@ private struct SnapshotRoundPlayLayer: View {
             .frame(maxWidth: .infinity)
 
             if interactive {
-                HStack(spacing: Spacing.small.cgFloat) {
-                    HintToggleButton(isActive: showHints, action: onToggleHints)
+                VStack {
+                    HStack(spacing: Spacing.small.cgFloat) {
+                        HintToggleButton(isActive: showHints, action: onToggleHints)
+
+                        Spacer()
+
+                        Button(action: onPause) {
+                            Image(systemName: "pause.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(ColorPalette.primary.swiftUIColor)
+                                .padding(Spacing.small.cgFloat)
+                                .background(Color.white.opacity(0.8), in: Circle())
+                                .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 6)
+                        }
+                    }
+                    .frame(width: maxPanelWidth)
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.top, 50)
 
                     Spacer()
-
-                    Button(action: onPause) {
-                        Image(systemName: "pause.fill")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(ColorPalette.primary.swiftUIColor)
-                            .padding(Spacing.small.cgFloat)
-                            .background(Color.white.opacity(0.8), in: Circle())
-                        .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 6)
-                    }
                 }
-                .padding(.top, 50)
-                .padding(.horizontal, Spacing.large.cgFloat)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
