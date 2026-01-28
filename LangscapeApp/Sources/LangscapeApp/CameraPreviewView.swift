@@ -517,12 +517,12 @@ private struct SnapshotRoundPlayLayer: View {
                             .foregroundStyle(ColorPalette.primary.swiftUIColor)
                             .padding(Spacing.small.cgFloat)
                             .background(Color.white.opacity(0.8), in: Circle())
-                            .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 6)
+                        .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 6)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.top, 50)
                 .padding(.horizontal, Spacing.large.cgFloat)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
