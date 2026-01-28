@@ -517,6 +517,7 @@ private struct SnapshotRoundPlayLayer: View {
                 .padding(.horizontal, Spacing.large.cgFloat)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func tokenState(for label: GameKitLS.Label) -> LabelToken.VisualState {
