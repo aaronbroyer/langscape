@@ -35,6 +35,8 @@ final class DetectionVM: ObservableObject {
     @Published var snapshot: UIImage?
     @Published var snapshotImageSize: CGSize?
     @Published var modelInputSize: CGSize?
+    @Published var currentDisplayTransform: CGAffineTransform?
+    @Published var snapshotDisplayTransform: CGAffineTransform?
     @Published var round: Round?
     @Published var placedLabels: Set<GameKitLS.Label.ID> = []
     @Published var lastIncorrectLabelID: GameKitLS.Label.ID?
@@ -88,6 +90,8 @@ final class DetectionVM: ObservableObject {
         snapshot = nil
         snapshotImageSize = nil
         modelInputSize = nil
+        currentDisplayTransform = nil
+        snapshotDisplayTransform = nil
         round = nil
         placedLabels = []
         lastIncorrectLabelID = nil
@@ -197,6 +201,8 @@ final class DetectionVM: ObservableObject {
             snapshot = nil
             snapshotImageSize = nil
             modelInputSize = nil
+            currentDisplayTransform = nil
+            snapshotDisplayTransform = nil
             round = nil
             placedLabels = []
             lastIncorrectLabelID = nil
@@ -208,9 +214,15 @@ final class DetectionVM: ObservableObject {
     }
 
     #if canImport(CoreVideo)
-    func handleFrame(_ buffer: CVPixelBuffer, orientationRaw: UInt32?, orientedInputSize: CGSize) {
+    func handleFrame(
+        _ buffer: CVPixelBuffer,
+        orientationRaw: UInt32?,
+        orientedInputSize: CGSize,
+        displayTransform: CGAffineTransform?
+    ) {
         currentPixelBuffer = buffer
         currentOrientationRaw = orientationRaw
+        currentDisplayTransform = displayTransform
         if inputImageSize != orientedInputSize {
             inputImageSize = orientedInputSize
         }
@@ -295,6 +307,7 @@ final class DetectionVM: ObservableObject {
         overlay = nil
         isPaused = false
         showIdentifiedObjectsHint = false
+        snapshotDisplayTransform = currentDisplayTransform
         state = .scanning
 
         let orientationRaw = currentOrientationRaw

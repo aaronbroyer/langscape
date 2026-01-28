@@ -415,7 +415,14 @@ struct CameraPreviewView: View {
     private func boundingRect(for object: DetectedObject, in viewSize: CGSize) -> CGRect {
         let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
         let modelSize = viewModel.modelInputSize
-        if let mapped = projectedRect(for: object.boundingBox, inputImageSize: sourceSize, modelInputSize: modelSize, viewSize: viewSize) {
+        let displayTransform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform
+        if let mapped = projectedRect(
+            for: object.boundingBox,
+            inputImageSize: sourceSize,
+            modelInputSize: modelSize,
+            displayTransform: displayTransform,
+            viewSize: viewSize
+        ) {
             return mapped
         }
         return object.boundingBox.rect(in: viewSize)
@@ -906,20 +913,28 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             guard let self else { return }
 
             #if canImport(UIKit) && canImport(ImageIO)
-            let orientationRawValue = await MainActor.run { () -> Int in
-                self.arView?.window?.windowScene?.interfaceOrientation.rawValue ?? UIInterfaceOrientation.portrait.rawValue
+            let (interfaceOrientation, displayTransform) = await MainActor.run { () -> (UIInterfaceOrientation, CGAffineTransform?) in
+                let orientation = self.arView?.window?.windowScene?.interfaceOrientation ?? .portrait
+                let viewportSize = self.arView?.bounds.size ?? .zero
+                let transform = frame.displayTransform(for: orientation, viewportSize: viewportSize)
+                return (orientation, transform)
             }
-            let interfaceOrientation = UIInterfaceOrientation(rawValue: orientationRawValue) ?? .portrait
             let exifOrientation = exifOrientationForBackCamera(interfaceOrientation)
             let orientationRaw = exifOrientation.rawValue
             let orientedInputSize = orientedSize(inputSize, for: exifOrientation)
-            #else
+        #else
             let orientationRaw: UInt32? = nil
+            let displayTransform: CGAffineTransform? = nil
             let orientedInputSize = inputSize
-            #endif
+        #endif
 
             await MainActor.run {
-                viewModel.handleFrame(pixelBuffer, orientationRaw: orientationRaw, orientedInputSize: orientedInputSize)
+                viewModel.handleFrame(
+                    pixelBuffer,
+                    orientationRaw: orientationRaw,
+                    orientedInputSize: orientedInputSize,
+                    displayTransform: displayTransform
+                )
             }
         }
     }
@@ -959,8 +974,26 @@ private func projectedRect(
     for normalizedRect: DetectionRect,
     inputImageSize: CGSize?,
     modelInputSize: CGSize?,
+    displayTransform: CGAffineTransform?,
     viewSize: CGSize
 ) -> CGRect? {
+    if let displayTransform {
+        let visionRect = CGRect(
+            x: CGFloat(normalizedRect.origin.x),
+            y: CGFloat(1.0 - normalizedRect.origin.y - normalizedRect.size.height),
+            width: CGFloat(normalizedRect.size.width),
+            height: CGFloat(normalizedRect.size.height)
+        )
+        let transformed = visionRect.applying(displayTransform)
+        let viewRect = CGRect(
+            x: transformed.minX * viewSize.width,
+            y: transformed.minY * viewSize.height,
+            width: transformed.width * viewSize.width,
+            height: transformed.height * viewSize.height
+        )
+        let clamped = viewRect.intersection(CGRect(origin: .zero, size: viewSize))
+        return clamped.isNull ? viewRect : clamped
+    }
     guard let inputImageSize, let cameraRect = projectedCameraFrameRect(inputImageSize: inputImageSize, viewSize: viewSize) else {
         return nil
     }
