@@ -414,13 +414,9 @@ struct CameraPreviewView: View {
 
     private func boundingRect(for object: DetectedObject, in viewSize: CGSize) -> CGRect {
         let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
-        let modelSize = viewModel.modelInputSize
-        let displayTransform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform
         if let mapped = projectedRect(
             for: object.boundingBox,
             inputImageSize: sourceSize,
-            modelInputSize: modelSize,
-            displayTransform: displayTransform,
             viewSize: viewSize
         ) {
             return mapped
@@ -973,91 +969,20 @@ private func orientedSize(_ size: CGSize, for orientation: CGImagePropertyOrient
 private func projectedRect(
     for normalizedRect: DetectionRect,
     inputImageSize: CGSize?,
-    modelInputSize: CGSize?,
-    displayTransform: CGAffineTransform?,
     viewSize: CGSize
 ) -> CGRect? {
-    if let displayTransform {
-        let visionRect = CGRect(
-            x: CGFloat(normalizedRect.origin.x),
-            y: CGFloat(1.0 - normalizedRect.origin.y - normalizedRect.size.height),
-            width: CGFloat(normalizedRect.size.width),
-            height: CGFloat(normalizedRect.size.height)
-        )
-        let transformed = visionRect.applying(displayTransform)
-        let viewRect = CGRect(
-            x: transformed.minX * viewSize.width,
-            y: transformed.minY * viewSize.height,
-            width: transformed.width * viewSize.width,
-            height: transformed.height * viewSize.height
-        )
-        let clamped = viewRect.intersection(CGRect(origin: .zero, size: viewSize))
-        return clamped.isNull ? viewRect : clamped
-    }
     guard let inputImageSize, let cameraRect = projectedCameraFrameRect(inputImageSize: inputImageSize, viewSize: viewSize) else {
         return nil
     }
-    let adjusted = normalizedRectAdjustedForModelInput(
-        normalizedRect,
-        inputImageSize: inputImageSize,
-        modelInputSize: modelInputSize
-    )
     let dw = cameraRect.width
     let dh = cameraRect.height
-    let x = cameraRect.origin.x + CGFloat(adjusted.origin.x) * dw
-    let y = cameraRect.origin.y + CGFloat(adjusted.origin.y) * dh
-    let w = CGFloat(adjusted.size.width) * dw
-    let h = CGFloat(adjusted.size.height) * dh
+    let x = cameraRect.origin.x + CGFloat(normalizedRect.origin.x) * dw
+    let y = cameraRect.origin.y + CGFloat(normalizedRect.origin.y) * dh
+    let w = CGFloat(normalizedRect.size.width) * dw
+    let h = CGFloat(normalizedRect.size.height) * dh
     let rect = CGRect(x: x, y: y, width: w, height: h)
     let clamped = rect.intersection(CGRect(origin: .zero, size: viewSize))
     return clamped.isNull ? rect : clamped
-}
-
-private func normalizedRectAdjustedForModelInput(
-    _ rect: DetectionRect,
-    inputImageSize: CGSize,
-    modelInputSize: CGSize?
-) -> DetectionRect {
-    guard let modelInputSize, modelInputSize.width > 0, modelInputSize.height > 0 else {
-        return rect
-    }
-    let iw = inputImageSize.width
-    let ih = inputImageSize.height
-    let mw = modelInputSize.width
-    let mh = modelInputSize.height
-    guard iw > 0, ih > 0 else { return rect }
-
-    let scale = min(mw / iw, mh / ih)
-    if scale <= 0 { return rect }
-    let scaledW = iw * scale
-    let scaledH = ih * scale
-    let padX = (mw - scaledW) / 2
-    let padY = (mh - scaledH) / 2
-
-    let xM = CGFloat(rect.origin.x) * mw
-    let yM = CGFloat(rect.origin.y) * mh
-    let wM = CGFloat(rect.size.width) * mw
-    let hM = CGFloat(rect.size.height) * mh
-
-    let x = (xM - padX) / scale
-    let y = (yM - padY) / scale
-    let w = wM / scale
-    let h = hM / scale
-
-    let xN = x / iw
-    let yN = y / ih
-    let wN = w / iw
-    let hN = h / ih
-
-    let x1 = max(0, min(1, xN))
-    let y1 = max(0, min(1, yN))
-    let x2 = max(0, min(1, xN + wN))
-    let y2 = max(0, min(1, yN + hN))
-
-    return DetectionRect(
-        origin: .init(x: Double(x1), y: Double(y1)),
-        size: .init(width: Double(max(0, x2 - x1)), height: Double(max(0, y2 - y1)))
-    )
 }
 
 private func projectedCameraFrameRect(inputImageSize: CGSize?, viewSize: CGSize) -> CGRect? {
