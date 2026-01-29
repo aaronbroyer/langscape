@@ -413,15 +413,29 @@ struct CameraPreviewView: View {
     }
 
     private func boundingRect(for object: DetectedObject, in viewSize: CGSize) -> CGRect {
+        // The snapshot image fills the full screen (.ignoresSafeArea + .fill),
+        // but overlay views are positioned in safe-area-local coordinates.
+        // Project bounding boxes using the full screen size to match the snapshot,
+        // then offset by the top safe area inset to convert to overlay coordinates.
+        let screenSize = UIScreen.main.bounds.size
+        let safeTop = safeAreaTop
         let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
         if let mapped = projectedRect(
             for: object.boundingBox,
             inputImageSize: sourceSize,
-            viewSize: viewSize
+            viewSize: screenSize
         ) {
-            return mapped
+            return mapped.offsetBy(dx: 0, dy: -safeTop)
         }
         return object.boundingBox.rect(in: viewSize)
+    }
+
+    private var safeAreaTop: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?
+            .keyWindow?
+            .safeAreaInsets.top ?? 0
     }
 }
 
