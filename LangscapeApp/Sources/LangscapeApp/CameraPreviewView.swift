@@ -25,6 +25,8 @@ struct CameraPreviewView: View {
 
     @State private var showHomeOverlay = true
     @State private var homeCardPressed = false
+    @State private var didLogProjectionDebug = false
+    @State private var useLetterboxCorrection: Bool? = nil
 
     @StateObject private var motion = MotionManager()
 
@@ -44,10 +46,9 @@ struct CameraPreviewView: View {
         }
     }
 
-    private var showsHintLayer: Bool {
+    private var shouldRenderHintLayer: Bool {
         viewModel.state == .playing
             && viewModel.snapshot != nil
-            && viewModel.showIdentifiedObjectsHint
             && (viewModel.round?.objects.isEmpty == false)
     }
 
@@ -67,10 +68,11 @@ struct CameraPreviewView: View {
                         .ignoresSafeArea()
                 }
 
-                if showsHintLayer, let round = viewModel.round {
+                if shouldRenderHintLayer, let round = viewModel.round {
                     hintBoxesLayer(for: round, in: proxy.size)
                         .allowsHitTesting(false)
-                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                        .opacity(viewModel.showIdentifiedObjectsHint ? 1 : 0)
+                        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: viewModel.showIdentifiedObjectsHint)
                 }
 
                 overlays(in: proxy.size)
@@ -85,6 +87,20 @@ struct CameraPreviewView: View {
             .clipped()
             .coordinateSpace(name: "experience")
             .background(Color.black)
+            .onChange(of: viewModel.round) { _, round in
+                guard let round else {
+                    didLogProjectionDebug = false
+                    useLetterboxCorrection = nil
+                    return
+                }
+                if useLetterboxCorrection == nil {
+                    let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
+                    useLetterboxCorrection = inferLetterboxCorrection(for: round, sourceSize: sourceSize, modelInputSize: viewModel.modelInputSize)
+                }
+                guard !didLogProjectionDebug else { return }
+                didLogProjectionDebug = true
+                logProjectionDebug(round: round, viewSize: proxy.size)
+            }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active {
                     viewModel.resume()
@@ -417,19 +433,26 @@ struct CameraPreviewView: View {
         // while overlays are laid out in safe-area-local coordinates.
         // Prefer ARKit's displayTransform (captured at snapshot time) for accurate projection.
         let safeInsets = safeAreaInsets
-        if let transform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform,
-           let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize,
-           let mapped = projectedRect(for: object.boundingBox, displayTransform: transform, viewportSize: viewportSize) {
-            return mapped.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
-        }
-
-        // Fallback: project using aspect-fill math against the full screen size.
+        let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
+        let normalizedRect = adjustedBoundingBox(
+            object.boundingBox,
+            sourceSize: sourceSize,
+            modelInputSize: viewModel.modelInputSize,
+            forceLetterboxCorrection: useLetterboxCorrection
+        )
+        // Project using aspect-fill math against the full screen size to match the snapshot.
         let fullSize = CGSize(
             width: viewSize.width + safeInsets.left + safeInsets.right,
             height: viewSize.height + safeInsets.top + safeInsets.bottom
         )
-        let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
-        if let mapped = projectedRect(for: object.boundingBox, inputImageSize: sourceSize, viewSize: fullSize) {
+        if let mapped = projectedRect(for: normalizedRect, inputImageSize: sourceSize, viewSize: fullSize) {
+            return mapped.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
+        }
+
+        // Fallback: use ARKit's display transform when aspect-fill projection fails.
+        if let transform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform,
+           let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize,
+           let mapped = projectedRect(for: normalizedRect, displayTransform: transform, viewportSize: viewportSize) {
             return mapped.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
         }
         return object.boundingBox.rect(in: viewSize)
@@ -441,6 +464,104 @@ struct CameraPreviewView: View {
             .first?
             .keyWindow?
             .safeAreaInsets ?? .zero
+    }
+
+    private func inferLetterboxCorrection(
+        for round: Round,
+        sourceSize: CGSize?,
+        modelInputSize: CGSize?
+    ) -> Bool? {
+        guard let letterbox = letterboxInfo(sourceSize: sourceSize, modelInputSize: modelInputSize) else { return nil }
+        let total = round.objects.count
+        guard total > 0 else { return nil }
+        let inside = round.objects.filter { object in
+            normalizedRect(object.boundingBox).isInside(letterbox.activeRect, tolerance: 0.02)
+        }.count
+        let ratio = Double(inside) / Double(total)
+        return ratio >= 0.9
+    }
+
+    private func adjustedBoundingBox(
+        _ rect: DetectionRect,
+        sourceSize: CGSize?,
+        modelInputSize: CGSize?,
+        forceLetterboxCorrection: Bool?
+    ) -> DetectionRect {
+        guard let letterbox = letterboxInfo(sourceSize: sourceSize, modelInputSize: modelInputSize) else {
+            return rect
+        }
+        let shouldCorrect: Bool
+        if let forceLetterboxCorrection {
+            shouldCorrect = forceLetterboxCorrection
+        } else {
+            shouldCorrect = normalizedRect(rect).isInside(letterbox.activeRect, tolerance: 0.02)
+        }
+        guard shouldCorrect else { return rect }
+
+        let modelW = Double(letterbox.modelSize.width)
+        let modelH = Double(letterbox.modelSize.height)
+        let scale = Double(letterbox.scale)
+        let padX = Double(letterbox.padX)
+        let padY = Double(letterbox.padY)
+
+        let xM = rect.origin.x * modelW
+        let yM = rect.origin.y * modelH
+        let wM = rect.size.width * modelW
+        let hM = rect.size.height * modelH
+
+        let xI = (xM - padX) / scale
+        let yI = (yM - padY) / scale
+        let wI = wM / scale
+        let hI = hM / scale
+
+        let sourceW = Double(letterbox.sourceSize.width)
+        let sourceH = Double(letterbox.sourceSize.height)
+
+        let normalized = DetectionRect(
+            origin: .init(x: xI / sourceW, y: yI / sourceH),
+            size: .init(width: wI / sourceW, height: hI / sourceH)
+        )
+        return normalized.clamped()
+    }
+
+    private func logProjectionDebug(round: Round, viewSize: CGSize) {
+        let logger = Logger.shared
+        let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
+        let modelInputSize = viewModel.modelInputSize
+        let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize
+        let safeInsets = safeAreaInsets
+        let transform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform
+        let hint = useLetterboxCorrection
+        let letterbox = letterboxInfo(sourceSize: sourceSize, modelInputSize: modelInputSize)
+        let insideCount = letterbox.map { box in
+            round.objects.filter { normalizedRect($0.boundingBox).isInside(box.activeRect, tolerance: 0.02) }.count
+        }
+        let ratio = insideCount.map { count in
+            round.objects.isEmpty ? 0.0 : Double(count) / Double(round.objects.count)
+        }
+
+        Task {
+            await logger.log(
+                "BBox debug: round objects=\(round.objects.count) viewSize=\(fmt(viewSize)) safeInsets=\(fmt(safeInsets)) sourceSize=\(fmt(sourceSize)) modelInputSize=\(fmt(modelInputSize)) viewportSize=\(fmt(viewportSize)) useLetterbox=\(hint.map(String.init(describing:)) ?? "nil") insideActive=\(insideCount.map(String.init(describing:)) ?? "nil") ratio=\(ratio.map { String(format: "%.2f", $0) } ?? "nil") transform=\(fmt(transform)) letterbox=\(fmt(letterbox))",
+                level: .debug,
+                category: "LangscapeApp.BBox"
+            )
+
+            let samples = round.objects.prefix(4)
+            for object in samples {
+                let raw = object.boundingBox
+                let adjusted = adjustedBoundingBox(raw, sourceSize: sourceSize, modelInputSize: modelInputSize, forceLetterboxCorrection: hint)
+                let projectedDisplay = transform.flatMap { t in
+                    viewportSize.flatMap { projectedRect(for: adjusted, displayTransform: t, viewportSize: $0) }
+                }
+                let projectedAspect = projectedRect(for: adjusted, inputImageSize: sourceSize, viewSize: viewSize)
+                await logger.log(
+                    "BBox sample \(object.displayLabel): raw=\(fmt(raw)) adjusted=\(fmt(adjusted)) displayRect=\(fmt(projectedDisplay)) aspectRect=\(fmt(projectedAspect))",
+                    level: .debug,
+                    category: "LangscapeApp.BBox"
+                )
+            }
+        }
     }
 }
 
@@ -1034,6 +1155,115 @@ private func projectedRect(
     )
     let clamped = rect.intersection(CGRect(origin: .zero, size: viewportSize))
     return clamped.isNull ? rect : clamped
+}
+
+private struct LetterboxInfo {
+    let sourceSize: CGSize
+    let modelSize: CGSize
+    let scale: CGFloat
+    let padX: CGFloat
+    let padY: CGFloat
+    let activeRect: CGRect
+}
+
+private func letterboxInfo(sourceSize: CGSize?, modelInputSize: CGSize?) -> LetterboxInfo? {
+    guard let sourceSize,
+          let modelInputSize,
+          sourceSize.width > 0,
+          sourceSize.height > 0,
+          modelInputSize.width > 0,
+          modelInputSize.height > 0 else { return nil }
+
+    let sourceAspect = sourceSize.width / sourceSize.height
+    let modelAspect = modelInputSize.width / modelInputSize.height
+    let aspectDiff = abs(sourceAspect - modelAspect)
+    guard aspectDiff > 0.001 else { return nil }
+
+    let scale = min(modelInputSize.width / sourceSize.width, modelInputSize.height / sourceSize.height)
+    guard scale > 0 else { return nil }
+
+    let scaledWidth = sourceSize.width * scale
+    let scaledHeight = sourceSize.height * scale
+    let padX = (modelInputSize.width - scaledWidth) / 2
+    let padY = (modelInputSize.height - scaledHeight) / 2
+
+    let activeRect = CGRect(
+        x: padX / modelInputSize.width,
+        y: padY / modelInputSize.height,
+        width: scaledWidth / modelInputSize.width,
+        height: scaledHeight / modelInputSize.height
+    )
+
+    return LetterboxInfo(
+        sourceSize: sourceSize,
+        modelSize: modelInputSize,
+        scale: scale,
+        padX: padX,
+        padY: padY,
+        activeRect: activeRect
+    )
+}
+
+private func normalizedRect(_ rect: DetectionRect) -> CGRect {
+    CGRect(
+        x: rect.origin.x,
+        y: rect.origin.y,
+        width: rect.size.width,
+        height: rect.size.height
+    )
+}
+
+private extension CGRect {
+    func isInside(_ container: CGRect, tolerance: Double) -> Bool {
+        let tol = CGFloat(tolerance)
+        return minX >= (container.minX - tol)
+            && minY >= (container.minY - tol)
+            && maxX <= (container.maxX + tol)
+            && maxY <= (container.maxY + tol)
+    }
+}
+
+private extension DetectionRect {
+    func clamped() -> DetectionRect {
+        let x = max(0.0, min(1.0, origin.x))
+        let y = max(0.0, min(1.0, origin.y))
+        let maxWidth = max(0.0, 1.0 - x)
+        let maxHeight = max(0.0, 1.0 - y)
+        let w = max(0.0, min(size.width, maxWidth))
+        let h = max(0.0, min(size.height, maxHeight))
+        return DetectionRect(origin: .init(x: x, y: y), size: .init(width: w, height: h))
+    }
+}
+
+private func fmt(_ size: CGSize?) -> String {
+    guard let size else { return "nil" }
+    return String(format: "%.2fx%.2f", size.width, size.height)
+}
+
+private func fmt(_ insets: UIEdgeInsets) -> String {
+    String(format: "t%.1f l%.1f b%.1f r%.1f", insets.top, insets.left, insets.bottom, insets.right)
+}
+
+private func fmt(_ rect: CGRect?) -> String {
+    guard let rect else { return "nil" }
+    return String(format: "x%.3f y%.3f w%.3f h%.3f", rect.origin.x, rect.origin.y, rect.size.width, rect.size.height)
+}
+
+private func fmt(_ rect: DetectionRect) -> String {
+    String(format: "x%.3f y%.3f w%.3f h%.3f", rect.origin.x, rect.origin.y, rect.size.width, rect.size.height)
+}
+
+private func fmt(_ transform: CGAffineTransform?) -> String {
+    guard let transform else { return "nil" }
+    return String(
+        format: "[%.4f %.4f %.4f %.4f %.4f %.4f]",
+        transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty
+    )
+}
+
+private func fmt(_ letterbox: LetterboxInfo?) -> String {
+    guard let letterbox else { return "nil" }
+    return "source=\(fmt(letterbox.sourceSize)) model=\(fmt(letterbox.modelSize)) scale=\(String(format: "%.4f", letterbox.scale)) padX=\(String(format: "%.2f", letterbox.padX)) padY=\(String(format: "%.2f", letterbox.padY)) active=\(fmt(letterbox.activeRect))"
 }
 
 private func projectedCameraFrameRect(inputImageSize: CGSize?, viewSize: CGSize) -> CGRect? {

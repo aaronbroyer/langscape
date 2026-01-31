@@ -314,6 +314,21 @@ final class DetectionVM: ObservableObject {
     func captureAndScan() {
         guard state == .hunting else { return }
         guard let currentBuffer = currentPixelBuffer else { return }
+        let bufferSize = CGSize(
+            width: CGFloat(CVPixelBufferGetWidth(currentBuffer)),
+            height: CGFloat(CVPixelBufferGetHeight(currentBuffer))
+        )
+        let orientationRaw = currentOrientationRaw
+        let orientedSize = inputImageSize
+        let viewportSize = currentViewportSize
+        let displayTransform = currentDisplayTransform
+        Task { [logger] in
+            await logger.log(
+                "CaptureAndScan: bufferSize=\(fmt(bufferSize)) orientedSize=\(fmt(orientedSize)) orientationRaw=\(orientationRaw.map(String.init(describing:)) ?? "nil") viewportSize=\(fmt(viewportSize)) displayTransform=\(fmt(displayTransform))",
+                level: .debug,
+                category: "LangscapeApp.DetectionVM"
+            )
+        }
         overlay = nil
         isPaused = false
         showIdentifiedObjectsHint = false
@@ -321,7 +336,6 @@ final class DetectionVM: ObservableObject {
         snapshotViewportSize = currentViewportSize
         state = .scanning
 
-        let orientationRaw = currentOrientationRaw
         Task { [weak self] in
             guard let self else { return }
             await self.freezeSnapshot(from: currentBuffer, orientationRaw: orientationRaw)
@@ -362,6 +376,12 @@ final class DetectionVM: ObservableObject {
                         self.state = .playing
                     }
                 }
+                let snapshotSize = await MainActor.run { self.snapshotImageSize }
+                await logger.log(
+                    "Scan complete: detections=\(detections.count) roundObjects=\(round.objects.count) modelInput=\(fmt(detectorInputSize)) snapshotSize=\(fmt(snapshotSize))",
+                    level: .debug,
+                    category: "LangscapeApp.DetectionVM"
+                )
             } catch {
                 await logger.log("Scan failed: \(error.localizedDescription)", level: .error, category: "LangscapeApp.DetectionVM")
                 await MainActor.run {
@@ -384,5 +404,22 @@ final class DetectionVM: ObservableObject {
     }
 
     #endif
+}
+
+private func fmt(_ size: CGSize?) -> String {
+    guard let size else { return "nil" }
+    return String(format: "%.2fx%.2f", size.width, size.height)
+}
+
+private func fmt(_ transform: CGAffineTransform?) -> String {
+    guard let transform else { return "nil" }
+    return String(
+        format: "[%.4f %.4f %.4f %.4f %.4f %.4f]",
+        transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty
+    )
+}
+
+private func fmt(_ size: CGSize) -> String {
+    String(format: "%.2fx%.2f", size.width, size.height)
 }
 #endif
