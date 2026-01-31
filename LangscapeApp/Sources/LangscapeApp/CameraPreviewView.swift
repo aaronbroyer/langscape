@@ -27,6 +27,7 @@ struct CameraPreviewView: View {
     @State private var homeCardPressed = false
     @State private var didLogProjectionDebug = false
     @State private var useLetterboxCorrection: Bool? = nil
+    @State private var snapshotFrame: CGRect? = nil
 
     @StateObject private var motion = MotionManager()
 
@@ -66,6 +67,14 @@ struct CameraPreviewView: View {
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                         .ignoresSafeArea()
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: SnapshotFrameKey.self,
+                                    value: geo.frame(in: .named("experience"))
+                                )
+                            }
+                        )
                 }
 
                 if shouldRenderHintLayer, let round = viewModel.round {
@@ -87,10 +96,14 @@ struct CameraPreviewView: View {
             .clipped()
             .coordinateSpace(name: "experience")
             .background(Color.black)
+            .onPreferenceChange(SnapshotFrameKey.self) { frame in
+                snapshotFrame = frame
+            }
             .onChange(of: viewModel.round) { _, round in
                 guard let round else {
                     didLogProjectionDebug = false
                     useLetterboxCorrection = nil
+                    snapshotFrame = nil
                     return
                 }
                 if useLetterboxCorrection == nil {
@@ -438,12 +451,18 @@ struct CameraPreviewView: View {
             modelInputSize: viewModel.modelInputSize,
             forceLetterboxCorrection: useLetterboxCorrection
         )
-        // Project using aspect-fill math against the view size to match the snapshot.
+        // Project into the actual snapshot frame when available.
+        if let snapshotFrame,
+           let mapped = projectedRect(for: normalizedRect, inputImageSize: sourceSize, viewSize: snapshotFrame.size) {
+            return mapped.offsetBy(dx: snapshotFrame.origin.x, dy: snapshotFrame.origin.y)
+        }
+
+        // Fallback: project using aspect-fill math against the view size.
         if let mapped = projectedRect(for: normalizedRect, inputImageSize: sourceSize, viewSize: viewSize) {
             return mapped
         }
 
-        // Fallback: use ARKit's display transform when aspect-fill projection fails.
+        // Fallback: use ARKit's display transform when other projections fail.
         if let transform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform,
            let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize,
            let mapped = projectedRect(for: normalizedRect, displayTransform: transform, viewportSize: viewportSize) {
@@ -533,10 +552,11 @@ struct CameraPreviewView: View {
         let ratio = insideCount.map { count in
             round.objects.isEmpty ? 0.0 : Double(count) / Double(round.objects.count)
         }
+        let snapshotFrame = snapshotFrame
 
         Task {
             await logger.log(
-                "BBox debug: round objects=\(round.objects.count) viewSize=\(fmt(viewSize)) safeInsets=\(fmt(safeInsets)) sourceSize=\(fmt(sourceSize)) modelInputSize=\(fmt(modelInputSize)) viewportSize=\(fmt(viewportSize)) useLetterbox=\(hint.map(String.init(describing:)) ?? "nil") insideActive=\(insideCount.map(String.init(describing:)) ?? "nil") ratio=\(ratio.map { String(format: "%.2f", $0) } ?? "nil") transform=\(fmt(transform)) letterbox=\(fmt(letterbox))",
+                "BBox debug: round objects=\(round.objects.count) viewSize=\(fmt(viewSize)) safeInsets=\(fmt(safeInsets)) snapshotFrame=\(fmt(snapshotFrame)) sourceSize=\(fmt(sourceSize)) modelInputSize=\(fmt(modelInputSize)) viewportSize=\(fmt(viewportSize)) useLetterbox=\(hint.map(String.init(describing:)) ?? "nil") insideActive=\(insideCount.map(String.init(describing:)) ?? "nil") ratio=\(ratio.map { String(format: "%.2f", $0) } ?? "nil") transform=\(fmt(transform)) letterbox=\(fmt(letterbox))",
                 level: .debug,
                 category: "LangscapeApp.BBox"
             )
@@ -546,12 +566,16 @@ struct CameraPreviewView: View {
                 let raw = object.boundingBox
                 let adjusted = adjustedBoundingBox(raw, sourceSize: sourceSize, modelInputSize: modelInputSize, forceLetterboxCorrection: hint)
                 let selected = boundingRect(for: object, in: viewSize)
+                let projectedSnapshot = snapshotFrame.flatMap { frame in
+                    projectedRect(for: adjusted, inputImageSize: sourceSize, viewSize: frame.size)
+                        .map { $0.offsetBy(dx: frame.origin.x, dy: frame.origin.y) }
+                }
                 let projectedDisplay = transform.flatMap { t in
                     viewportSize.flatMap { projectedRect(for: adjusted, displayTransform: t, viewportSize: $0) }
                 }
                 let projectedAspect = projectedRect(for: adjusted, inputImageSize: sourceSize, viewSize: viewSize)
                 await logger.log(
-                    "BBox sample \(object.displayLabel): raw=\(fmt(raw)) adjusted=\(fmt(adjusted)) selectedRect=\(fmt(selected)) displayRect=\(fmt(projectedDisplay)) aspectRect=\(fmt(projectedAspect))",
+                    "BBox sample \(object.displayLabel): raw=\(fmt(raw)) adjusted=\(fmt(adjusted)) selectedRect=\(fmt(selected)) snapshotRect=\(fmt(projectedSnapshot)) displayRect=\(fmt(projectedDisplay)) aspectRect=\(fmt(projectedAspect))",
                     level: .debug,
                     category: "LangscapeApp.BBox"
                 )
@@ -1227,6 +1251,16 @@ private extension DetectionRect {
         let w = max(0.0, min(size.width, maxWidth))
         let h = max(0.0, min(size.height, maxHeight))
         return DetectionRect(origin: .init(x: x, y: y), size: .init(width: w, height: h))
+    }
+}
+
+private struct SnapshotFrameKey: PreferenceKey {
+    static var defaultValue: CGRect? = nil
+
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        if let next = nextValue() {
+            value = next
+        }
     }
 }
 
