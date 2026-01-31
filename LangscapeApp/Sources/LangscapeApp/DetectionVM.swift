@@ -37,6 +37,8 @@ final class DetectionVM: ObservableObject {
     @Published var modelInputSize: CGSize?
     @Published var currentDisplayTransform: CGAffineTransform?
     @Published var snapshotDisplayTransform: CGAffineTransform?
+    @Published var currentViewportSize: CGSize?
+    @Published var snapshotViewportSize: CGSize?
     @Published var round: Round?
     @Published var placedLabels: Set<GameKitLS.Label.ID> = []
     @Published var lastIncorrectLabelID: GameKitLS.Label.ID?
@@ -92,6 +94,8 @@ final class DetectionVM: ObservableObject {
         modelInputSize = nil
         currentDisplayTransform = nil
         snapshotDisplayTransform = nil
+        currentViewportSize = nil
+        snapshotViewportSize = nil
         round = nil
         placedLabels = []
         lastIncorrectLabelID = nil
@@ -203,6 +207,8 @@ final class DetectionVM: ObservableObject {
             modelInputSize = nil
             currentDisplayTransform = nil
             snapshotDisplayTransform = nil
+            currentViewportSize = nil
+            snapshotViewportSize = nil
             round = nil
             placedLabels = []
             lastIncorrectLabelID = nil
@@ -218,11 +224,15 @@ final class DetectionVM: ObservableObject {
         _ buffer: CVPixelBuffer,
         orientationRaw: UInt32?,
         orientedInputSize: CGSize,
-        displayTransform: CGAffineTransform?
+        displayTransform: CGAffineTransform?,
+        viewportSize: CGSize?
     ) {
         currentPixelBuffer = buffer
         currentOrientationRaw = orientationRaw
         currentDisplayTransform = displayTransform
+        if currentViewportSize != viewportSize {
+            currentViewportSize = viewportSize
+        }
         if inputImageSize != orientedInputSize {
             inputImageSize = orientedInputSize
         }
@@ -308,6 +318,7 @@ final class DetectionVM: ObservableObject {
         isPaused = false
         showIdentifiedObjectsHint = false
         snapshotDisplayTransform = currentDisplayTransform
+        snapshotViewportSize = currentViewportSize
         state = .scanning
 
         let orientationRaw = currentOrientationRaw

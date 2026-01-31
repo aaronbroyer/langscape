@@ -414,28 +414,33 @@ struct CameraPreviewView: View {
 
     private func boundingRect(for object: DetectedObject, in viewSize: CGSize) -> CGRect {
         // The snapshot image fills the full screen (.ignoresSafeArea + .fill),
-        // but overlay views are positioned in safe-area-local coordinates.
-        // Project bounding boxes using the full screen size to match the snapshot,
-        // then offset by the top safe area inset to convert to overlay coordinates.
-        let screenSize = UIScreen.main.bounds.size
-        let safeTop = safeAreaTop
+        // while overlays are laid out in safe-area-local coordinates.
+        // Prefer ARKit's displayTransform (captured at snapshot time) for accurate projection.
+        let safeInsets = safeAreaInsets
+        if let transform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform,
+           let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize,
+           let mapped = projectedRect(for: object.boundingBox, displayTransform: transform, viewportSize: viewportSize) {
+            return mapped.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
+        }
+
+        // Fallback: project using aspect-fill math against the full screen size.
+        let fullSize = CGSize(
+            width: viewSize.width + safeInsets.left + safeInsets.right,
+            height: viewSize.height + safeInsets.top + safeInsets.bottom
+        )
         let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
-        if let mapped = projectedRect(
-            for: object.boundingBox,
-            inputImageSize: sourceSize,
-            viewSize: screenSize
-        ) {
-            return mapped.offsetBy(dx: 0, dy: -safeTop)
+        if let mapped = projectedRect(for: object.boundingBox, inputImageSize: sourceSize, viewSize: fullSize) {
+            return mapped.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
         }
         return object.boundingBox.rect(in: viewSize)
     }
 
-    private var safeAreaTop: CGFloat {
+    private var safeAreaInsets: UIEdgeInsets {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?
             .keyWindow?
-            .safeAreaInsets.top ?? 0
+            .safeAreaInsets ?? .zero
     }
 }
 
@@ -923,11 +928,11 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
             guard let self else { return }
 
             #if canImport(UIKit) && canImport(ImageIO)
-            let (interfaceOrientation, displayTransform) = await MainActor.run { () -> (UIInterfaceOrientation, CGAffineTransform?) in
+            let (interfaceOrientation, displayTransform, viewportSize) = await MainActor.run { () -> (UIInterfaceOrientation, CGAffineTransform?, CGSize?) in
                 let orientation = self.arView?.window?.windowScene?.interfaceOrientation ?? .portrait
-                let viewportSize = self.arView?.bounds.size ?? .zero
-                let transform = frame.displayTransform(for: orientation, viewportSize: viewportSize)
-                return (orientation, transform)
+                let viewportSize = self.arView?.bounds.size
+                let transform = viewportSize.map { frame.displayTransform(for: orientation, viewportSize: $0) }
+                return (orientation, transform, viewportSize)
             }
             let exifOrientation = exifOrientationForBackCamera(interfaceOrientation)
             let orientationRaw = exifOrientation.rawValue
@@ -935,6 +940,7 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
         #else
             let orientationRaw: UInt32? = nil
             let displayTransform: CGAffineTransform? = nil
+            let viewportSize: CGSize? = nil
             let orientedInputSize = inputSize
         #endif
 
@@ -943,7 +949,8 @@ private final class ARSessionCoordinator: NSObject, ARSessionDelegate {
                     pixelBuffer,
                     orientationRaw: orientationRaw,
                     orientedInputSize: orientedInputSize,
-                    displayTransform: displayTransform
+                    displayTransform: displayTransform,
+                    viewportSize: viewportSize
                 )
             }
         }
@@ -996,6 +1003,36 @@ private func projectedRect(
     let h = CGFloat(normalizedRect.size.height) * dh
     let rect = CGRect(x: x, y: y, width: w, height: h)
     let clamped = rect.intersection(CGRect(origin: .zero, size: viewSize))
+    return clamped.isNull ? rect : clamped
+}
+
+private func projectedRect(
+    for normalizedRect: DetectionRect,
+    displayTransform: CGAffineTransform,
+    viewportSize: CGSize
+) -> CGRect? {
+    guard viewportSize.width > 0, viewportSize.height > 0 else { return nil }
+    let points = [
+        CGPoint(x: normalizedRect.origin.x, y: normalizedRect.origin.y),
+        CGPoint(x: normalizedRect.origin.x + normalizedRect.size.width, y: normalizedRect.origin.y),
+        CGPoint(x: normalizedRect.origin.x, y: normalizedRect.origin.y + normalizedRect.size.height),
+        CGPoint(x: normalizedRect.origin.x + normalizedRect.size.width, y: normalizedRect.origin.y + normalizedRect.size.height)
+    ].map { $0.applying(displayTransform) }
+
+    guard let minX = points.map(\.x).min(),
+          let maxX = points.map(\.x).max(),
+          let minY = points.map(\.y).min(),
+          let maxY = points.map(\.y).max() else {
+        return nil
+    }
+
+    let rect = CGRect(
+        x: minX * viewportSize.width,
+        y: minY * viewportSize.height,
+        width: (maxX - minX) * viewportSize.width,
+        height: (maxY - minY) * viewportSize.height
+    )
+    let clamped = rect.intersection(CGRect(origin: .zero, size: viewportSize))
     return clamped.isNull ? rect : clamped
 }
 
