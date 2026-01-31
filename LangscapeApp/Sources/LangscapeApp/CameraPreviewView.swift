@@ -429,10 +429,8 @@ struct CameraPreviewView: View {
     }
 
     private func boundingRect(for object: DetectedObject, in viewSize: CGSize) -> CGRect {
-        // The snapshot image fills the full screen (.ignoresSafeArea + .fill),
-        // while overlays are laid out in safe-area-local coordinates.
-        // Prefer ARKit's displayTransform (captured at snapshot time) for accurate projection.
-        let safeInsets = safeAreaInsets
+        // The snapshot image is clipped to the same GeometryReader size as overlays.
+        // Project directly into the view's coordinate space.
         let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
         let normalizedRect = adjustedBoundingBox(
             object.boundingBox,
@@ -440,20 +438,16 @@ struct CameraPreviewView: View {
             modelInputSize: viewModel.modelInputSize,
             forceLetterboxCorrection: useLetterboxCorrection
         )
-        // Project using aspect-fill math against the full screen size to match the snapshot.
-        let fullSize = CGSize(
-            width: viewSize.width + safeInsets.left + safeInsets.right,
-            height: viewSize.height + safeInsets.top + safeInsets.bottom
-        )
-        if let mapped = projectedRect(for: normalizedRect, inputImageSize: sourceSize, viewSize: fullSize) {
-            return mapped.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
+        // Project using aspect-fill math against the view size to match the snapshot.
+        if let mapped = projectedRect(for: normalizedRect, inputImageSize: sourceSize, viewSize: viewSize) {
+            return mapped
         }
 
         // Fallback: use ARKit's display transform when aspect-fill projection fails.
         if let transform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform,
            let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize,
            let mapped = projectedRect(for: normalizedRect, displayTransform: transform, viewportSize: viewportSize) {
-            return mapped.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
+            return mapped
         }
         return object.boundingBox.rect(in: viewSize)
     }
@@ -551,12 +545,13 @@ struct CameraPreviewView: View {
             for object in samples {
                 let raw = object.boundingBox
                 let adjusted = adjustedBoundingBox(raw, sourceSize: sourceSize, modelInputSize: modelInputSize, forceLetterboxCorrection: hint)
+                let selected = boundingRect(for: object, in: viewSize)
                 let projectedDisplay = transform.flatMap { t in
                     viewportSize.flatMap { projectedRect(for: adjusted, displayTransform: t, viewportSize: $0) }
                 }
                 let projectedAspect = projectedRect(for: adjusted, inputImageSize: sourceSize, viewSize: viewSize)
                 await logger.log(
-                    "BBox sample \(object.displayLabel): raw=\(fmt(raw)) adjusted=\(fmt(adjusted)) displayRect=\(fmt(projectedDisplay)) aspectRect=\(fmt(projectedAspect))",
+                    "BBox sample \(object.displayLabel): raw=\(fmt(raw)) adjusted=\(fmt(adjusted)) selectedRect=\(fmt(selected)) displayRect=\(fmt(projectedDisplay)) aspectRect=\(fmt(projectedAspect))",
                     level: .debug,
                     category: "LangscapeApp.BBox"
                 )
@@ -1247,6 +1242,10 @@ private func fmt(_ insets: UIEdgeInsets) -> String {
 private func fmt(_ rect: CGRect?) -> String {
     guard let rect else { return "nil" }
     return String(format: "x%.3f y%.3f w%.3f h%.3f", rect.origin.x, rect.origin.y, rect.size.width, rect.size.height)
+}
+
+private func fmt(_ rect: CGRect) -> String {
+    String(format: "x%.3f y%.3f w%.3f h%.3f", rect.origin.x, rect.origin.y, rect.size.width, rect.size.height)
 }
 
 private func fmt(_ rect: DetectionRect) -> String {
