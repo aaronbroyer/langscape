@@ -28,6 +28,7 @@ struct CameraPreviewView: View {
     @State private var didLogProjectionDebug = false
     @State private var useLetterboxCorrection: Bool? = nil
     @State private var snapshotFrame: CGRect? = nil
+    @State private var useSnapshotFrameProjection: Bool? = nil
 
     @StateObject private var motion = MotionManager()
 
@@ -98,17 +99,24 @@ struct CameraPreviewView: View {
             .background(Color.black)
             .onPreferenceChange(SnapshotFrameKey.self) { frame in
                 snapshotFrame = frame
+                if let round = viewModel.round {
+                    useSnapshotFrameProjection = inferSnapshotFrameProjection(for: round, viewSize: proxy.size)
+                }
             }
             .onChange(of: viewModel.round) { _, round in
                 guard let round else {
                     didLogProjectionDebug = false
                     useLetterboxCorrection = nil
                     snapshotFrame = nil
+                    useSnapshotFrameProjection = nil
                     return
                 }
                 if useLetterboxCorrection == nil {
                     let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
                     useLetterboxCorrection = inferLetterboxCorrection(for: round, sourceSize: sourceSize, modelInputSize: viewModel.modelInputSize)
+                }
+                if useSnapshotFrameProjection == nil {
+                    useSnapshotFrameProjection = inferSnapshotFrameProjection(for: round, viewSize: proxy.size)
                 }
                 guard !didLogProjectionDebug else { return }
                 didLogProjectionDebug = true
@@ -451,15 +459,21 @@ struct CameraPreviewView: View {
             modelInputSize: viewModel.modelInputSize,
             forceLetterboxCorrection: useLetterboxCorrection
         )
-        // Project into the actual snapshot frame when available.
-        if let snapshotFrame,
+        let prefersSnapshotFrame = useSnapshotFrameProjection ?? (snapshotFrame != nil)
+        if prefersSnapshotFrame,
+           let snapshotFrame,
            let mapped = projectedRect(for: normalizedRect, inputImageSize: sourceSize, viewSize: snapshotFrame.size) {
             return mapped.offsetBy(dx: snapshotFrame.origin.x, dy: snapshotFrame.origin.y)
         }
 
-        // Fallback: project using aspect-fill math against the view size.
         if let mapped = projectedRect(for: normalizedRect, inputImageSize: sourceSize, viewSize: viewSize) {
             return mapped
+        }
+
+        if !prefersSnapshotFrame,
+           let snapshotFrame,
+           let mapped = projectedRect(for: normalizedRect, inputImageSize: sourceSize, viewSize: snapshotFrame.size) {
+            return mapped.offsetBy(dx: snapshotFrame.origin.x, dy: snapshotFrame.origin.y)
         }
 
         // Fallback: use ARKit's display transform when other projections fail.
@@ -553,10 +567,23 @@ struct CameraPreviewView: View {
             round.objects.isEmpty ? 0.0 : Double(count) / Double(round.objects.count)
         }
         let snapshotFrame = snapshotFrame
+        let snapshotProjection = useSnapshotFrameProjection
+        let adjustedRects = round.objects.map { object in
+            adjustedBoundingBox(
+                object.boundingBox,
+                sourceSize: sourceSize,
+                modelInputSize: modelInputSize,
+                forceLetterboxCorrection: hint
+            )
+        }
+        let snapshotScore = snapshotFrame.map { frame in
+            projectionScore(for: adjustedRects, sourceSize: sourceSize, viewSize: frame.size)
+        }
+        let viewScore = projectionScore(for: adjustedRects, sourceSize: sourceSize, viewSize: viewSize)
 
         Task {
             await logger.log(
-                "BBox debug: round objects=\(round.objects.count) viewSize=\(fmt(viewSize)) safeInsets=\(fmt(safeInsets)) snapshotFrame=\(fmt(snapshotFrame)) sourceSize=\(fmt(sourceSize)) modelInputSize=\(fmt(modelInputSize)) viewportSize=\(fmt(viewportSize)) useLetterbox=\(hint.map(String.init(describing:)) ?? "nil") insideActive=\(insideCount.map(String.init(describing:)) ?? "nil") ratio=\(ratio.map { String(format: "%.2f", $0) } ?? "nil") transform=\(fmt(transform)) letterbox=\(fmt(letterbox))",
+                "BBox debug: round objects=\(round.objects.count) viewSize=\(fmt(viewSize)) safeInsets=\(fmt(safeInsets)) snapshotFrame=\(fmt(snapshotFrame)) useSnapshotFrame=\(snapshotProjection.map(String.init(describing:)) ?? "nil") snapshotScore=\(snapshotScore.map { String(format: "%.2f", $0) } ?? "nil") viewScore=\(String(format: "%.2f", viewScore)) sourceSize=\(fmt(sourceSize)) modelInputSize=\(fmt(modelInputSize)) viewportSize=\(fmt(viewportSize)) useLetterbox=\(hint.map(String.init(describing:)) ?? "nil") insideActive=\(insideCount.map(String.init(describing:)) ?? "nil") ratio=\(ratio.map { String(format: "%.2f", $0) } ?? "nil") transform=\(fmt(transform)) letterbox=\(fmt(letterbox))",
                 level: .debug,
                 category: "LangscapeApp.BBox"
             )
@@ -570,17 +597,51 @@ struct CameraPreviewView: View {
                     projectedRect(for: adjusted, inputImageSize: sourceSize, viewSize: frame.size)
                         .map { $0.offsetBy(dx: frame.origin.x, dy: frame.origin.y) }
                 }
+                let projectedView = projectedRect(for: adjusted, inputImageSize: sourceSize, viewSize: viewSize)
                 let projectedDisplay = transform.flatMap { t in
                     viewportSize.flatMap { projectedRect(for: adjusted, displayTransform: t, viewportSize: $0) }
                 }
-                let projectedAspect = projectedRect(for: adjusted, inputImageSize: sourceSize, viewSize: viewSize)
                 await logger.log(
-                    "BBox sample \(object.displayLabel): raw=\(fmt(raw)) adjusted=\(fmt(adjusted)) selectedRect=\(fmt(selected)) snapshotRect=\(fmt(projectedSnapshot)) displayRect=\(fmt(projectedDisplay)) aspectRect=\(fmt(projectedAspect))",
+                    "BBox sample \(object.displayLabel): raw=\(fmt(raw)) adjusted=\(fmt(adjusted)) selectedRect=\(fmt(selected)) snapshotRect=\(fmt(projectedSnapshot)) viewRect=\(fmt(projectedView)) displayRect=\(fmt(projectedDisplay))",
                     level: .debug,
                     category: "LangscapeApp.BBox"
                 )
             }
         }
+    }
+
+    private func inferSnapshotFrameProjection(for round: Round, viewSize: CGSize) -> Bool? {
+        guard let snapshotFrame else { return nil }
+        let sourceSize = viewModel.snapshotImageSize ?? viewModel.inputImageSize
+        let adjusted = round.objects.map { object in
+            adjustedBoundingBox(
+                object.boundingBox,
+                sourceSize: sourceSize,
+                modelInputSize: viewModel.modelInputSize,
+                forceLetterboxCorrection: useLetterboxCorrection
+            )
+        }
+        let snapshotScore = projectionScore(for: adjusted, sourceSize: sourceSize, viewSize: snapshotFrame.size)
+        let viewScore = projectionScore(for: adjusted, sourceSize: sourceSize, viewSize: viewSize)
+        return snapshotScore >= viewScore
+    }
+
+    private func projectionScore(
+        for rects: [DetectionRect],
+        sourceSize: CGSize?,
+        viewSize: CGSize
+    ) -> Double {
+        guard !rects.isEmpty else { return 0 }
+        let viewBounds = CGRect(origin: .zero, size: viewSize)
+        var total: Double = 0
+        for rect in rects {
+            guard let mapped = projectedRect(for: rect, inputImageSize: sourceSize, viewSize: viewSize) else { continue }
+            let intersection = mapped.intersection(viewBounds)
+            let area = max(mapped.width * mapped.height, 1)
+            let inside = max(intersection.width * intersection.height, 0)
+            total += Double(inside / area)
+        }
+        return total / Double(rects.count)
     }
 }
 
