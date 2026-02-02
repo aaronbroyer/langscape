@@ -371,6 +371,7 @@ struct CameraPreviewView: View {
                 HintBoundingBox(frame: frame, state: matchedObjects.contains(object.id) ? .matched : .pending)
             }
         }
+        .frame(width: viewSize.width, height: viewSize.height, alignment: .topLeading)
     }
 
     private func beginLabelScramble() {
@@ -688,6 +689,7 @@ private struct SnapshotRoundPlayLayer: View {
                 }
                 .animation(.spring(response: 0.35, dampingFraction: 0.8), value: placedLabels)
             }
+            .frame(width: viewSize.width, height: viewSize.height, alignment: .topLeading)
             .offset(parallaxOffset)
             .allowsHitTesting(false)
 
