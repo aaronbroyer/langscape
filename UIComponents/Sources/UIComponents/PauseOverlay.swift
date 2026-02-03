@@ -13,12 +13,12 @@ public struct PauseOverlay: View {
 
     public var body: some View {
         TranslucentPanel(cornerRadius: 24) {
-            VStack(spacing: Spacing.medium.cgFloat) {
+            VStack(spacing: Spacing.small.cgFloat) {
                 Text("Paused")
                     .font(Typography.title.font.weight(.semibold))
                     .foregroundStyle(ColorPalette.primary.swiftUIColor)
 
-                PrimaryButton(title: "Resume", action: resumeAction)
+                PrimaryButton(title: "Resume", size: .compact, action: resumeAction)
 
                 Button(role: .destructive, action: exitAction) {
                     Text("Return Home")
@@ -26,9 +26,10 @@ public struct PauseOverlay: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
+                .controlSize(.small)
                 .tint(ColorPalette.accent.swiftUIColor)
             }
-            .padding(.vertical, Spacing.medium.cgFloat)
+            .padding(.vertical, Spacing.small.cgFloat)
         }
         .padding(.horizontal, Spacing.large.cgFloat)
     }
