@@ -26,7 +26,6 @@ public struct ObjectTargetOverlay: View {
             )
             .shadow(color: glowColor.opacity(0.35), radius: 12, x: 0, y: 8)
             .frame(width: frame.width, height: frame.height)
-            .position(x: frame.midX, y: frame.midY)
             .animation(.easeInOut(duration: 0.25), value: state)
     }
 
@@ -79,10 +78,14 @@ public struct ObjectTargetOverlay: View {
 }
 
 #Preview {
+    let rect1 = CGRect(x: 120, y: 200, width: 160, height: 120)
+    let rect2 = CGRect(x: 40, y: 80, width: 80, height: 80)
     ZStack {
         Color.black
-        ObjectTargetOverlay(frame: CGRect(x: 120, y: 200, width: 160, height: 120))
-        ObjectTargetOverlay(frame: CGRect(x: 40, y: 80, width: 80, height: 80), state: .satisfied)
+        ObjectTargetOverlay(frame: rect1)
+            .position(x: rect1.midX, y: rect1.midY)
+        ObjectTargetOverlay(frame: rect2, state: .satisfied)
+            .position(x: rect2.midX, y: rect2.midY)
     }
     .frame(width: 320, height: 480)
 }

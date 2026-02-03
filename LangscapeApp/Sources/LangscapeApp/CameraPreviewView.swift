@@ -369,6 +369,7 @@ struct CameraPreviewView: View {
             ForEach(round.objects) { object in
                 let frame = boundingRect(for: object, in: viewSize)
                 HintBoundingBox(frame: frame, state: matchedObjects.contains(object.id) ? .matched : .pending)
+                    .position(x: frame.midX, y: frame.midY)
             }
         }
         .frame(width: viewSize.width, height: viewSize.height, alignment: .topLeading)
@@ -684,7 +685,8 @@ private struct SnapshotRoundPlayLayer: View {
         ZStack {
             ZStack {
                 ForEach(placedLabelOverlays, id: \.label.id) { entry in
-                    StickyLabelOverlay(text: entry.label.text, frame: entry.frame)
+                    StickyLabelOverlay(text: entry.label.text)
+                        .position(x: entry.frame.midX, y: entry.frame.midY)
                         .transition(.scale.combined(with: .opacity))
                 }
                 .animation(.spring(response: 0.35, dampingFraction: 0.8), value: placedLabels)
@@ -890,14 +892,12 @@ private struct HintCornerTicks: View {
         )
         .shadow(color: color.opacity(emphasized ? 0.55 : 0.35), radius: 6, x: 0, y: 0)
         .frame(width: frame.width, height: frame.height)
-        .position(x: frame.midX, y: frame.midY)
         .blendMode(.screen)
     }
 }
 
 private struct StickyLabelOverlay: View {
     let text: String
-    let frame: CGRect
 
     var body: some View {
         Text(text)
@@ -920,7 +920,6 @@ private struct StickyLabelOverlay: View {
                     .stroke(Color.white.opacity(0.28), lineWidth: 1)
             )
             .shadow(color: Color.black.opacity(0.22), radius: 8, x: 0, y: 5)
-            .position(x: frame.midX, y: frame.midY)
     }
 }
 
