@@ -64,42 +64,18 @@ struct CameraPreviewView: View {
                 .ignoresSafeArea()
 
                 if showsSnapshotLayer, let snapshot = viewModel.snapshot {
-                    let safeInsets = safeAreaInsets
-                    let displayTransform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform
-                    let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize
-                    if let displayTransform,
-                       let viewportSize,
-                       let overlayRect = projectedViewportRect(
-                           displayTransform: displayTransform,
-                           viewportSize: viewportSize,
-                           safeInsets: safeInsets
-                       ) {
-                        Image(uiImage: snapshot)
-                            .resizable()
-                            .frame(width: overlayRect.width, height: overlayRect.height)
-                            .position(x: overlayRect.midX, y: overlayRect.midY)
-                            .background(
-                                GeometryReader { geo in
-                                    Color.clear.preference(
-                                        key: SnapshotFrameKey.self,
-                                        value: geo.frame(in: .named("experience"))
-                                    )
-                                }
-                            )
-                    } else {
-                        Image(uiImage: snapshot)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .ignoresSafeArea()
-                            .background(
-                                GeometryReader { geo in
-                                    Color.clear.preference(
-                                        key: SnapshotFrameKey.self,
-                                        value: geo.frame(in: .named("experience"))
-                                    )
-                                }
-                            )
-                    }
+                    Image(uiImage: snapshot)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .ignoresSafeArea()
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: SnapshotFrameKey.self,
+                                    value: geo.frame(in: .named("experience"))
+                                )
+                            }
+                        )
                 }
 
                 if shouldRenderHintLayer, let round = viewModel.round {
@@ -486,9 +462,8 @@ struct CameraPreviewView: View {
             forceLetterboxCorrection: useLetterboxCorrection
         )
         let safeInsets = safeAreaInsets
-        if let transform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform,
-           let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize,
-           let mapped = projectedRect(for: normalizedRect, displayTransform: transform, viewportSize: viewportSize) {
+        let cameraViewportSize = cameraViewportSize(for: viewSize, safeInsets: safeInsets)
+        if let mapped = projectedRect(for: normalizedRect, inputImageSize: sourceSize, viewSize: cameraViewportSize) {
             let offset = mapped.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
             let viewBounds = CGRect(origin: .zero, size: viewSize)
             let clamped = offset.intersection(viewBounds)
@@ -586,7 +561,7 @@ struct CameraPreviewView: View {
         let modelInputSize = viewModel.modelInputSize
         let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize
         let safeInsets = safeAreaInsets
-        let transform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform
+        let cameraViewportSize = cameraViewportSize(for: viewSize, safeInsets: safeInsets)
         let hint = useLetterboxCorrection
         let letterbox = letterboxInfo(sourceSize: sourceSize, modelInputSize: modelInputSize)
         let insideCount = letterbox.map { box in
@@ -609,10 +584,13 @@ struct CameraPreviewView: View {
             projectionScore(for: adjustedRects, sourceSize: sourceSize, viewSize: frame.size)
         }
         let viewScore = projectionScore(for: adjustedRects, sourceSize: sourceSize, viewSize: viewSize)
+        let cameraScore = projectionScore(for: adjustedRects, sourceSize: sourceSize, viewSize: cameraViewportSize)
+        let cameraFrame = projectedCameraFrameRect(inputImageSize: sourceSize, viewSize: cameraViewportSize)
+            .map { $0.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top) }
 
         Task {
             await logger.log(
-                "BBox debug: round objects=\(round.objects.count) viewSize=\(fmt(viewSize)) safeInsets=\(fmt(safeInsets)) snapshotFrame=\(fmt(snapshotFrame)) useSnapshotFrame=\(snapshotProjection.map(String.init(describing:)) ?? "nil") snapshotScore=\(snapshotScore.map { String(format: "%.2f", $0) } ?? "nil") viewScore=\(String(format: "%.2f", viewScore)) sourceSize=\(fmt(sourceSize)) modelInputSize=\(fmt(modelInputSize)) viewportSize=\(fmt(viewportSize)) useLetterbox=\(hint.map(String.init(describing:)) ?? "nil") insideActive=\(insideCount.map(String.init(describing:)) ?? "nil") ratio=\(ratio.map { String(format: "%.2f", $0) } ?? "nil") transform=\(fmt(transform)) letterbox=\(fmt(letterbox))",
+                "BBox debug: round objects=\(round.objects.count) viewSize=\(fmt(viewSize)) safeInsets=\(fmt(safeInsets)) cameraViewport=\(fmt(cameraViewportSize)) cameraFrame=\(fmt(cameraFrame)) snapshotFrame=\(fmt(snapshotFrame)) useSnapshotFrame=\(snapshotProjection.map(String.init(describing:)) ?? "nil") snapshotScore=\(snapshotScore.map { String(format: "%.2f", $0) } ?? "nil") viewScore=\(String(format: "%.2f", viewScore)) cameraScore=\(String(format: "%.2f", cameraScore)) sourceSize=\(fmt(sourceSize)) modelInputSize=\(fmt(modelInputSize)) viewportSize=\(fmt(viewportSize)) useLetterbox=\(hint.map(String.init(describing:)) ?? "nil") insideActive=\(insideCount.map(String.init(describing:)) ?? "nil") ratio=\(ratio.map { String(format: "%.2f", $0) } ?? "nil") letterbox=\(fmt(letterbox))",
                 level: .debug,
                 category: "LangscapeApp.BBox"
             )
@@ -627,12 +605,10 @@ struct CameraPreviewView: View {
                         .map { $0.offsetBy(dx: frame.origin.x, dy: frame.origin.y) }
                 }
                 let projectedView = projectedRect(for: adjusted, inputImageSize: sourceSize, viewSize: viewSize)
-                let projectedDisplay = transform.flatMap { t in
-                    viewportSize.flatMap { projectedRect(for: adjusted, displayTransform: t, viewportSize: $0) }
-                }
-                .map { $0.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top) }
+                let projectedCamera = projectedRect(for: adjusted, inputImageSize: sourceSize, viewSize: cameraViewportSize)
+                    .map { $0.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top) }
                 await logger.log(
-                    "BBox sample \(object.displayLabel): raw=\(fmt(raw)) adjusted=\(fmt(adjusted)) selectedRect=\(fmt(selected)) snapshotRect=\(fmt(projectedSnapshot)) viewRect=\(fmt(projectedView)) displayRect=\(fmt(projectedDisplay))",
+                    "BBox sample \(object.displayLabel): raw=\(fmt(raw)) adjusted=\(fmt(adjusted)) selectedRect=\(fmt(selected)) snapshotRect=\(fmt(projectedSnapshot)) viewRect=\(fmt(projectedView)) cameraRect=\(fmt(projectedCamera))",
                     level: .debug,
                     category: "LangscapeApp.BBox"
                 )
@@ -672,6 +648,13 @@ struct CameraPreviewView: View {
             total += Double(inside / area)
         }
         return total / Double(rects.count)
+    }
+
+    private func cameraViewportSize(for viewSize: CGSize, safeInsets: UIEdgeInsets) -> CGSize {
+        CGSize(
+            width: viewSize.width + safeInsets.left + safeInsets.right,
+            height: viewSize.height + safeInsets.top + safeInsets.bottom
+        )
     }
 }
 
@@ -1234,65 +1217,6 @@ private func projectedRect(
     let rect = CGRect(x: x, y: y, width: w, height: h)
     let clamped = rect.intersection(CGRect(origin: .zero, size: viewSize))
     return clamped.isNull ? rect : clamped
-}
-
-private func projectedRect(
-    for normalizedRect: DetectionRect,
-    displayTransform: CGAffineTransform,
-    viewportSize: CGSize
-) -> CGRect? {
-    guard viewportSize.width > 0, viewportSize.height > 0 else { return nil }
-    let points = [
-        CGPoint(x: normalizedRect.origin.x, y: normalizedRect.origin.y),
-        CGPoint(x: normalizedRect.origin.x + normalizedRect.size.width, y: normalizedRect.origin.y),
-        CGPoint(x: normalizedRect.origin.x, y: normalizedRect.origin.y + normalizedRect.size.height),
-        CGPoint(x: normalizedRect.origin.x + normalizedRect.size.width, y: normalizedRect.origin.y + normalizedRect.size.height)
-    ].map { $0.applying(displayTransform) }
-
-    guard let minX = points.map(\.x).min(),
-          let maxX = points.map(\.x).max(),
-          let minY = points.map(\.y).min(),
-          let maxY = points.map(\.y).max() else {
-        return nil
-    }
-
-    let rect = CGRect(
-        x: minX * viewportSize.width,
-        y: minY * viewportSize.height,
-        width: (maxX - minX) * viewportSize.width,
-        height: (maxY - minY) * viewportSize.height
-    )
-    let clamped = rect.intersection(CGRect(origin: .zero, size: viewportSize))
-    return clamped.isNull ? rect : clamped
-}
-
-private func projectedViewportRect(
-    displayTransform: CGAffineTransform,
-    viewportSize: CGSize,
-    safeInsets: UIEdgeInsets
-) -> CGRect? {
-    guard viewportSize.width > 0, viewportSize.height > 0 else { return nil }
-    let points = [
-        CGPoint(x: 0, y: 0),
-        CGPoint(x: 1, y: 0),
-        CGPoint(x: 0, y: 1),
-        CGPoint(x: 1, y: 1)
-    ].map { $0.applying(displayTransform) }
-
-    guard let minX = points.map(\.x).min(),
-          let maxX = points.map(\.x).max(),
-          let minY = points.map(\.y).min(),
-          let maxY = points.map(\.y).max() else {
-        return nil
-    }
-
-    let rect = CGRect(
-        x: minX * viewportSize.width,
-        y: minY * viewportSize.height,
-        width: (maxX - minX) * viewportSize.width,
-        height: (maxY - minY) * viewportSize.height
-    )
-    return rect.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
 }
 
 private struct LetterboxInfo {
