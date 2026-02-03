@@ -64,18 +64,42 @@ struct CameraPreviewView: View {
                 .ignoresSafeArea()
 
                 if showsSnapshotLayer, let snapshot = viewModel.snapshot {
-                    Image(uiImage: snapshot)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .ignoresSafeArea()
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: SnapshotFrameKey.self,
-                                    value: geo.frame(in: .named("experience"))
-                                )
-                            }
-                        )
+                    let safeInsets = safeAreaInsets
+                    let displayTransform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform
+                    let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize
+                    if let displayTransform,
+                       let viewportSize,
+                       let overlayRect = projectedViewportRect(
+                           displayTransform: displayTransform,
+                           viewportSize: viewportSize,
+                           safeInsets: safeInsets
+                       ) {
+                        Image(uiImage: snapshot)
+                            .resizable()
+                            .frame(width: overlayRect.width, height: overlayRect.height)
+                            .position(x: overlayRect.midX, y: overlayRect.midY)
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: SnapshotFrameKey.self,
+                                        value: geo.frame(in: .named("experience"))
+                                    )
+                                }
+                            )
+                    } else {
+                        Image(uiImage: snapshot)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .ignoresSafeArea()
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: SnapshotFrameKey.self,
+                                        value: geo.frame(in: .named("experience"))
+                                    )
+                                }
+                            )
+                    }
                 }
 
                 if shouldRenderHintLayer, let round = viewModel.round {
@@ -461,6 +485,15 @@ struct CameraPreviewView: View {
             modelInputSize: viewModel.modelInputSize,
             forceLetterboxCorrection: useLetterboxCorrection
         )
+        let safeInsets = safeAreaInsets
+        if let transform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform,
+           let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize,
+           let mapped = projectedRect(for: normalizedRect, displayTransform: transform, viewportSize: viewportSize) {
+            let offset = mapped.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
+            let viewBounds = CGRect(origin: .zero, size: viewSize)
+            let clamped = offset.intersection(viewBounds)
+            return clamped.isNull ? offset : clamped
+        }
         let prefersSnapshotFrame = useSnapshotFrameProjection ?? (snapshotFrame != nil)
         if prefersSnapshotFrame,
            let snapshotFrame,
@@ -478,12 +511,6 @@ struct CameraPreviewView: View {
             return mapped.offsetBy(dx: snapshotFrame.origin.x, dy: snapshotFrame.origin.y)
         }
 
-        // Fallback: use ARKit's display transform when other projections fail.
-        if let transform = viewModel.snapshotDisplayTransform ?? viewModel.currentDisplayTransform,
-           let viewportSize = viewModel.snapshotViewportSize ?? viewModel.currentViewportSize,
-           let mapped = projectedRect(for: normalizedRect, displayTransform: transform, viewportSize: viewportSize) {
-            return mapped
-        }
         return object.boundingBox.rect(in: viewSize)
     }
 
@@ -496,14 +523,18 @@ struct CameraPreviewView: View {
     }
 
     private func inferLetterboxCorrection(
-        for _: Round,
+        for round: Round,
         sourceSize: CGSize?,
         modelInputSize: CGSize?
     ) -> Bool? {
-        guard letterboxInfo(sourceSize: sourceSize, modelInputSize: modelInputSize) != nil else { return nil }
-        // Vision uses scaleFit for the YOLO request, so detections are in letterboxed space.
-        // Always correct back to source coordinates when the model input aspect differs.
-        return true
+        guard let letterbox = letterboxInfo(sourceSize: sourceSize, modelInputSize: modelInputSize) else { return nil }
+        let total = round.objects.count
+        guard total > 0 else { return nil }
+        let inside = round.objects.filter { object in
+            normalizedRect(object.boundingBox).isInside(letterbox.activeRect, tolerance: 0.02)
+        }.count
+        let ratio = Double(inside) / Double(total)
+        return ratio >= 0.9
     }
 
     private func adjustedBoundingBox(
@@ -599,6 +630,7 @@ struct CameraPreviewView: View {
                 let projectedDisplay = transform.flatMap { t in
                     viewportSize.flatMap { projectedRect(for: adjusted, displayTransform: t, viewportSize: $0) }
                 }
+                .map { $0.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top) }
                 await logger.log(
                     "BBox sample \(object.displayLabel): raw=\(fmt(raw)) adjusted=\(fmt(adjusted)) selectedRect=\(fmt(selected)) snapshotRect=\(fmt(projectedSnapshot)) viewRect=\(fmt(projectedView)) displayRect=\(fmt(projectedDisplay))",
                     level: .debug,
@@ -1232,6 +1264,35 @@ private func projectedRect(
     )
     let clamped = rect.intersection(CGRect(origin: .zero, size: viewportSize))
     return clamped.isNull ? rect : clamped
+}
+
+private func projectedViewportRect(
+    displayTransform: CGAffineTransform,
+    viewportSize: CGSize,
+    safeInsets: UIEdgeInsets
+) -> CGRect? {
+    guard viewportSize.width > 0, viewportSize.height > 0 else { return nil }
+    let points = [
+        CGPoint(x: 0, y: 0),
+        CGPoint(x: 1, y: 0),
+        CGPoint(x: 0, y: 1),
+        CGPoint(x: 1, y: 1)
+    ].map { $0.applying(displayTransform) }
+
+    guard let minX = points.map(\.x).min(),
+          let maxX = points.map(\.x).max(),
+          let minY = points.map(\.y).min(),
+          let maxY = points.map(\.y).max() else {
+        return nil
+    }
+
+    let rect = CGRect(
+        x: minX * viewportSize.width,
+        y: minY * viewportSize.height,
+        width: (maxX - minX) * viewportSize.width,
+        height: (maxY - minY) * viewportSize.height
+    )
+    return rect.offsetBy(dx: -safeInsets.left, dy: -safeInsets.top)
 }
 
 private struct LetterboxInfo {
