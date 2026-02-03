@@ -961,6 +961,7 @@ private struct DraggableToken: View {
         GeometryReader { proxy in
             let frame = proxy.frame(in: .named("experience"))
             LabelToken(text: label.text, state: state)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(state == .placed ? 0 : 1)
                 .scaleEffect(isDragging ? (isNearTarget ? 1.08 : 1.05) : 1)
                 .offset(dragOffset)
@@ -1017,7 +1018,7 @@ private struct DraggableToken: View {
                     }
                 }
         }
-        .frame(height: 56)
+        .frame(height: 60)
     }
 }
 

@@ -20,8 +20,9 @@ public struct LabelToken: View {
     public var body: some View {
         Text(text)
             .font(Typography.body.font.weight(.semibold))
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
+            .truncationMode(.tail)
             .foregroundStyle(foregroundColor)
             .padding(.horizontal, Spacing.large.cgFloat)
             .padding(.vertical, Spacing.small.cgFloat)
