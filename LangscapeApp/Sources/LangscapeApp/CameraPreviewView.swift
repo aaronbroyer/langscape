@@ -265,6 +265,8 @@ struct CameraPreviewView: View {
                         Button(action: viewModel.retryContext) {
                             Text("Rescan")
                                 .font(Typography.body.font.weight(.semibold))
+                                .padding(.vertical, Spacing.small.cgFloat)
+                                .padding(.horizontal, Spacing.medium.cgFloat)
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
