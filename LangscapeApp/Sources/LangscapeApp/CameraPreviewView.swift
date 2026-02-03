@@ -877,25 +877,37 @@ private struct HintCornerTicks: View {
 
     var body: some View {
         let minEdge = min(frame.width, frame.height)
+        let cornerRadius = max(12, minEdge * 0.12)
+        let corner = min(cornerRadius, minEdge / 2)
         let tick = min(max(6, minEdge * 0.22), minEdge * 0.5)
+        let tickX = min(tick, max(0, frame.width - (corner * 2)))
+        let tickY = min(tick, max(0, frame.height - (corner * 2)))
         let lineWidth = max(1.5, min(minEdge * 0.03, emphasized ? 3 : 2.4))
 
         Path { path in
-            path.move(to: CGPoint(x: 0, y: tick))
-            path.addLine(to: CGPoint(x: 0, y: 0))
-            path.addLine(to: CGPoint(x: tick, y: 0))
+            // Top-left
+            path.move(to: CGPoint(x: 0, y: corner))
+            path.addLine(to: CGPoint(x: 0, y: corner + tickY))
+            path.move(to: CGPoint(x: corner, y: 0))
+            path.addLine(to: CGPoint(x: corner + tickX, y: 0))
 
-            path.move(to: CGPoint(x: frame.width - tick, y: 0))
-            path.addLine(to: CGPoint(x: frame.width, y: 0))
-            path.addLine(to: CGPoint(x: frame.width, y: tick))
+            // Top-right
+            path.move(to: CGPoint(x: frame.width - corner - tickX, y: 0))
+            path.addLine(to: CGPoint(x: frame.width - corner, y: 0))
+            path.move(to: CGPoint(x: frame.width, y: corner))
+            path.addLine(to: CGPoint(x: frame.width, y: corner + tickY))
 
-            path.move(to: CGPoint(x: frame.width, y: frame.height - tick))
-            path.addLine(to: CGPoint(x: frame.width, y: frame.height))
-            path.addLine(to: CGPoint(x: frame.width - tick, y: frame.height))
+            // Bottom-right
+            path.move(to: CGPoint(x: frame.width, y: frame.height - corner - tickY))
+            path.addLine(to: CGPoint(x: frame.width, y: frame.height - corner))
+            path.move(to: CGPoint(x: frame.width - corner - tickX, y: frame.height))
+            path.addLine(to: CGPoint(x: frame.width - corner, y: frame.height))
 
-            path.move(to: CGPoint(x: tick, y: frame.height))
-            path.addLine(to: CGPoint(x: 0, y: frame.height))
-            path.addLine(to: CGPoint(x: 0, y: frame.height - tick))
+            // Bottom-left
+            path.move(to: CGPoint(x: corner, y: frame.height))
+            path.addLine(to: CGPoint(x: corner + tickX, y: frame.height))
+            path.move(to: CGPoint(x: 0, y: frame.height - corner - tickY))
+            path.addLine(to: CGPoint(x: 0, y: frame.height - corner))
         }
         .stroke(
             color.opacity(emphasized ? 0.95 : 0.85),
