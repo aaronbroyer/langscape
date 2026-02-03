@@ -496,18 +496,14 @@ struct CameraPreviewView: View {
     }
 
     private func inferLetterboxCorrection(
-        for round: Round,
+        for _: Round,
         sourceSize: CGSize?,
         modelInputSize: CGSize?
     ) -> Bool? {
-        guard let letterbox = letterboxInfo(sourceSize: sourceSize, modelInputSize: modelInputSize) else { return nil }
-        let total = round.objects.count
-        guard total > 0 else { return nil }
-        let inside = round.objects.filter { object in
-            normalizedRect(object.boundingBox).isInside(letterbox.activeRect, tolerance: 0.02)
-        }.count
-        let ratio = Double(inside) / Double(total)
-        return ratio >= 0.9
+        guard letterboxInfo(sourceSize: sourceSize, modelInputSize: modelInputSize) != nil else { return nil }
+        // Vision uses scaleFit for the YOLO request, so detections are in letterboxed space.
+        // Always correct back to source coordinates when the model input aspect differs.
+        return true
     }
 
     private func adjustedBoundingBox(
