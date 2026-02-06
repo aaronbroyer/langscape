@@ -14,8 +14,8 @@ public struct PauseOverlay: View {
     public var body: some View {
         GeometryReader { proxy in
             let horizontalInset = Spacing.large.cgFloat
-            let availableWidth = max(proxy.size.width - (horizontalInset * 2), 0)
-            let panelWidth = min(availableWidth, 420)
+            let panelWidth = max(proxy.size.width - (horizontalInset * 2), 0)
+            let contentWidth = max(panelWidth - (Spacing.medium.cgFloat * 2), 0)
 
             TranslucentPanel(cornerRadius: 24) {
                 VStack(spacing: Spacing.small.cgFloat) {
@@ -34,9 +34,9 @@ public struct PauseOverlay: View {
                     .controlSize(.small)
                     .tint(ColorPalette.accent.swiftUIColor)
                 }
+                .frame(width: contentWidth)
                 .padding(.vertical, Spacing.small.cgFloat)
             }
-            .frame(width: panelWidth)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
     }
