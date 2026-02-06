@@ -12,26 +12,33 @@ public struct PauseOverlay: View {
     }
 
     public var body: some View {
-        TranslucentPanel(cornerRadius: 24) {
-            VStack(spacing: Spacing.small.cgFloat) {
-                Text("Paused")
-                    .font(Typography.title.font.weight(.semibold))
-                    .foregroundStyle(ColorPalette.primary.swiftUIColor)
+        GeometryReader { proxy in
+            let horizontalInset = Spacing.large.cgFloat
+            let availableWidth = max(proxy.size.width - (horizontalInset * 2), 0)
+            let panelWidth = min(availableWidth, 420)
 
-                PrimaryButton(title: "Resume", size: .compact, action: resumeAction)
+            TranslucentPanel(cornerRadius: 24) {
+                VStack(spacing: Spacing.small.cgFloat) {
+                    Text("Paused")
+                        .font(Typography.title.font.weight(.semibold))
+                        .foregroundStyle(ColorPalette.primary.swiftUIColor)
 
-                Button(role: .destructive, action: exitAction) {
-                    Text("Return Home")
-                        .font(Typography.body.font)
-                        .frame(maxWidth: .infinity)
+                    PrimaryButton(title: "Resume", size: .compact, action: resumeAction)
+
+                    Button(role: .destructive, action: exitAction) {
+                        Text("Return Home")
+                            .font(Typography.body.font)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(ColorPalette.accent.swiftUIColor)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(ColorPalette.accent.swiftUIColor)
+                .padding(.vertical, Spacing.small.cgFloat)
             }
-            .padding(.vertical, Spacing.small.cgFloat)
+            .frame(width: panelWidth)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
-        .padding(.horizontal, Spacing.large.cgFloat)
     }
 }
 
