@@ -153,10 +153,18 @@ struct CameraPreviewView: View {
             }
 
             if viewModel.isPaused, viewModel.state == .playing, viewModel.overlay == nil {
+                let horizontalPadding = Spacing.large.cgFloat
+                let panelWidth = max(0, size.width - (horizontalPadding * 2))
+
                 Color.black.opacity(0.35)
                     .ignoresSafeArea()
 
-                PauseOverlay(resumeAction: viewModel.resume, exitAction: exitToHome)
+                VStack {
+                    PauseOverlay(resumeAction: viewModel.resume, exitAction: exitToHome)
+                        .frame(width: panelWidth)
+                        .padding(.horizontal, horizontalPadding)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     .transition(.scale.combined(with: .opacity))
             }
 
