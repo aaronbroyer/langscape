@@ -717,12 +717,9 @@ private struct SnapshotRoundPlayLayer: View {
         let panelHeight = max(measuredTrayHeight, estimatedTrayHeight)
         let clampedOffset = clampedTrayOffset(
             trayOffset,
-            panelWidth: panelWidth,
             panelHeight: panelHeight,
             horizontalPadding: horizontalPadding
         )
-        let trayCenterX = (viewSize.width / 2) + clampedOffset.width
-        let trayCenterY = baseTrayCenterY(panelHeight: panelHeight) + clampedOffset.height
 
         ZStack {
             ZStack {
@@ -737,23 +734,29 @@ private struct SnapshotRoundPlayLayer: View {
             .offset(parallaxOffset)
             .allowsHitTesting(false)
 
-            vocabularyTray(width: panelWidth, horizontalPadding: horizontalPadding)
-                .position(x: trayCenterX, y: trayCenterY)
-                .onPreferenceChange(TrayHeightPreferenceKey.self) { height in
-                    guard height > 0 else { return }
-                    if abs(height - measuredTrayHeight) > 0.5 {
-                        measuredTrayHeight = height
+            VStack {
+                Spacer()
+
+                vocabularyTray(width: panelWidth, horizontalPadding: horizontalPadding)
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.bottom, Spacing.xLarge.cgFloat)
+                    .offset(x: clampedOffset.width, y: clampedOffset.height)
+                    .onPreferenceChange(TrayHeightPreferenceKey.self) { height in
+                        guard height > 0 else { return }
+                        if abs(height - measuredTrayHeight) > 0.5 {
+                            measuredTrayHeight = height
+                        }
                     }
-                }
-                .onChange(of: panelHeight) { _, _ in
-                    trayOffset = clampedTrayOffset(
-                        trayOffset,
-                        panelWidth: panelWidth,
-                        panelHeight: panelHeight,
-                        horizontalPadding: horizontalPadding
-                    )
-                }
-                .animation(.spring(response: 0.3, dampingFraction: 0.82), value: clampedOffset)
+                    .onChange(of: panelHeight) { _, _ in
+                        trayOffset = clampedTrayOffset(
+                            trayOffset,
+                            panelHeight: panelHeight,
+                            horizontalPadding: horizontalPadding
+                        )
+                    }
+                    .animation(.spring(response: 0.3, dampingFraction: 0.82), value: clampedOffset)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
             if interactive {
                 VStack {
@@ -781,6 +784,11 @@ private struct SnapshotRoundPlayLayer: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            trayOffset = .zero
+            trayDragStartOffset = .zero
+            isDraggingTray = false
+        }
     }
 
     @ViewBuilder
@@ -808,7 +816,6 @@ private struct SnapshotRoundPlayLayer: View {
                             )
                             trayOffset = clampedTrayOffset(
                                 rawOffset,
-                                panelWidth: width,
                                 panelHeight: max(measuredTrayHeight, estimatedTrayHeight),
                                 horizontalPadding: horizontalPadding
                             )
@@ -821,7 +828,6 @@ private struct SnapshotRoundPlayLayer: View {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
                                 trayOffset = clampedTrayOffset(
                                     rawOffset,
-                                    panelWidth: width,
                                     panelHeight: max(measuredTrayHeight, estimatedTrayHeight),
                                     horizontalPadding: horizontalPadding
                                 )
@@ -870,36 +876,20 @@ private struct SnapshotRoundPlayLayer: View {
 
     private func clampedTrayOffset(
         _ rawOffset: CGSize,
-        panelWidth: CGFloat,
         panelHeight: CGFloat,
         horizontalPadding: CGFloat
     ) -> CGSize {
-        let baseCenter = CGPoint(x: viewSize.width / 2, y: baseTrayCenterY(panelHeight: panelHeight))
-        let proposedCenter = CGPoint(
-            x: baseCenter.x + rawOffset.width,
-            y: baseCenter.y + rawOffset.height
-        )
-
-        let minCenterX = horizontalPadding + (panelWidth / 2)
-        let maxCenterX = viewSize.width - horizontalPadding - (panelWidth / 2)
-
+        let xLimit = max(0, horizontalPadding)
+        let clampedX = min(max(rawOffset.width, -xLimit), xLimit)
         let topSafeInset: CGFloat = 110
-        let minCenterY = topSafeInset + (panelHeight / 2)
-        let maxCenterY = viewSize.height - Spacing.xLarge.cgFloat - (panelHeight / 2)
-
-        let clampedCenter = CGPoint(
-            x: min(max(proposedCenter.x, minCenterX), maxCenterX),
-            y: min(max(proposedCenter.y, minCenterY), maxCenterY)
-        )
+        let baselineTop = viewSize.height - Spacing.xLarge.cgFloat - panelHeight
+        let minYOffset = min(0, topSafeInset - baselineTop)
+        let clampedY = min(max(rawOffset.height, minYOffset), 0)
 
         return CGSize(
-            width: clampedCenter.x - baseCenter.x,
-            height: clampedCenter.y - baseCenter.y
+            width: clampedX,
+            height: clampedY
         )
-    }
-
-    private func baseTrayCenterY(panelHeight: CGFloat) -> CGFloat {
-        viewSize.height - Spacing.xLarge.cgFloat - (panelHeight / 2)
     }
 
     private func tokenState(for label: GameKitLS.Label) -> LabelToken.VisualState {
