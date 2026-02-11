@@ -299,13 +299,14 @@ struct CameraPreviewView: View {
 
             TranslucentPanel(cornerRadius: 28) {
                 VStack(spacing: Spacing.medium.cgFloat) {
-                    Text("\(viewModel.liveObjectCount) Objects Found")
+                    Text(viewModel.isLiveDetectionWarmingUp ? "Finding objects…" : "\(viewModel.liveObjectCount) Objects Found")
                         .font(Typography.title.font.weight(.semibold))
                         .foregroundStyle(ColorPalette.primary.swiftUIColor)
 
                     PrimaryButton(title: "Play") {
                         viewModel.captureAndScan()
                     }
+                    .disabled(viewModel.isLiveDetectionWarmingUp)
                 }
                 .padding(.horizontal, Spacing.large.cgFloat)
                 .padding(.vertical, Spacing.large.cgFloat)

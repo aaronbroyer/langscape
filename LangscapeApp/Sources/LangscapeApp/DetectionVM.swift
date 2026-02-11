@@ -46,6 +46,7 @@ final class DetectionVM: ObservableObject {
     @Published var inputImageSize: CGSize?
     @Published var isPaused: Bool = false
     @Published var showIdentifiedObjectsHint: Bool = false
+    @Published var isLiveDetectionWarmingUp: Bool = false
 
     private let logger: Logger
     private let settings: AppSettings
@@ -61,6 +62,8 @@ final class DetectionVM: ObservableObject {
 
     private var classifierPrepared = false
     private var liveDetectorPrepared = false
+    private var warmingContext: String?
+    private var contextWarmupTask: Task<Void, Never>?
     private var lastContextAttempt: Date = .distantPast
     private var lastLiveAttempt: Date = .distantPast
     private var liveInFlight = false
@@ -86,6 +89,9 @@ final class DetectionVM: ObservableObject {
     }
 
     func start() {
+        contextWarmupTask?.cancel()
+        contextWarmupTask = nil
+        warmingContext = nil
         overlay = nil
         detectedContext = nil
         liveObjectCount = 0
@@ -101,6 +107,7 @@ final class DetectionVM: ObservableObject {
         lastIncorrectLabelID = nil
         isPaused = false
         showIdentifiedObjectsHint = false
+        isLiveDetectionWarmingUp = false
         state = .identifyingContext
     }
 
@@ -111,6 +118,7 @@ final class DetectionVM: ObservableObject {
     func onContextFound(_ context: String) {
         guard state == .identifyingContext else { return }
         detectedContext = context
+        beginContextWarmup(for: context)
         state = .confirmContext
     }
 
@@ -118,27 +126,20 @@ final class DetectionVM: ObservableObject {
         guard state == .confirmContext, let context = detectedContext else { return }
         overlay = nil
         liveObjectCount = 0
+        isLiveDetectionWarmingUp = true
         state = .hunting
+        beginContextWarmup(for: context)
         #if canImport(CoreVideo)
         kickstartLiveDetection()
         #endif
-
-        Task { [objectDetector, liveDetector, logger] in
-            _ = await objectDetector.loadContext(context)
-            do {
-                if !liveDetectorPrepared {
-                    try await liveDetector.prepare()
-                    liveDetectorPrepared = true
-                }
-                try await liveDetector.loadContext(context)
-            } catch {
-                await logger.log("Live detector context load failed: \(error.localizedDescription)", level: .warning, category: "LangscapeApp.DetectionVM")
-            }
-        }
     }
 
     func retryContext() {
         guard state == .confirmContext else { return }
+        contextWarmupTask?.cancel()
+        contextWarmupTask = nil
+        warmingContext = nil
+        isLiveDetectionWarmingUp = false
         detectedContext = nil
         state = .identifyingContext
     }
@@ -214,6 +215,7 @@ final class DetectionVM: ObservableObject {
             lastIncorrectLabelID = nil
             isPaused = false
             showIdentifiedObjectsHint = false
+            isLiveDetectionWarmingUp = false
             liveObjectCount = 0
             state = .hunting
         }
@@ -277,6 +279,7 @@ final class DetectionVM: ObservableObject {
     }
 
     private func processLiveFrame(_ buffer: CVPixelBuffer) {
+        guard liveDetectorPrepared else { return }
         guard !liveInFlight else { return }
         let now = Date()
         guard now.timeIntervalSince(lastLiveAttempt) >= liveThrottle else { return }
@@ -288,17 +291,64 @@ final class DetectionVM: ObservableObject {
             guard let self else { return }
             defer { self.liveInFlight = false }
             do {
-                if !liveDetectorPrepared {
-                    try await liveDetector.prepare()
-                    liveDetectorPrepared = true
-                }
                 let request = DetectionRequest(pixelBuffer: buffer, imageOrientationRaw: orientationRaw)
                 let detections = try await liveDetector.detect(on: request)
                 await MainActor.run {
                     self.liveObjectCount = detections.count
+                    self.isLiveDetectionWarmingUp = false
                 }
             } catch {
                 await logger.log("Live detection failed: \(error.localizedDescription)", level: .debug, category: "LangscapeApp.DetectionVM")
+            }
+        }
+    }
+
+    private func beginContextWarmup(for context: String) {
+        if warmingContext == context {
+            return
+        }
+
+        contextWarmupTask?.cancel()
+        warmingContext = context
+        isLiveDetectionWarmingUp = true
+
+        contextWarmupTask = Task { [weak self, objectDetector, liveDetector, logger] in
+            guard let self else { return }
+
+            async let objectContextLoad: Bool = objectDetector.loadContext(context)
+            var liveWarmupSucceeded = true
+
+            do {
+                if !liveDetectorPrepared {
+                    try await liveDetector.prepare()
+                    liveDetectorPrepared = true
+                }
+                try await liveDetector.loadContext(context)
+            } catch {
+                liveWarmupSucceeded = false
+                await logger.log(
+                    "Live detector context warmup failed: \(error.localizedDescription)",
+                    level: .warning,
+                    category: "LangscapeApp.DetectionVM"
+                )
+            }
+
+            _ = await objectContextLoad
+            if Task.isCancelled { return }
+
+            await MainActor.run {
+                guard self.warmingContext == context else { return }
+                self.warmingContext = nil
+                self.contextWarmupTask = nil
+                if !liveWarmupSucceeded {
+                    self.isLiveDetectionWarmingUp = false
+                    return
+                }
+                #if canImport(CoreVideo)
+                if self.state == .hunting {
+                    self.kickstartLiveDetection()
+                }
+                #endif
             }
         }
     }
