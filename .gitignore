@@ -12,7 +12,7 @@ xcuserdata/
 .env
 SegmentationKit/Sources/SegmentationKit/Resources/.cache/
 
-Agents.md
+AGENTS.md
 
 # Ultralytics exports at repo root 
 /yolov8*.pt
