@@ -670,12 +670,6 @@ struct CameraPreviewView: View {
 }
 
 private struct SnapshotRoundPlayLayer: View {
-    private enum TrayDock: CaseIterable {
-        case bottom
-        case middle
-        case top
-    }
-
     let round: Round
     let placedLabels: Set<GameKitLS.Label.ID>
     let lastIncorrectLabelID: GameKitLS.Label.ID?
@@ -689,6 +683,9 @@ private struct SnapshotRoundPlayLayer: View {
     let onToggleHints: () -> Void
 
     @State private var measuredTrayHeight: CGFloat = 0
+    @State private var trayOffset: CGSize = .zero
+    @State private var trayDragStartOffset: CGSize = .zero
+    @State private var isDraggingTray = false
 
     private var columns: [GridItem] {
         [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
@@ -708,15 +705,6 @@ private struct SnapshotRoundPlayLayer: View {
         }
     }
 
-    private var pendingObjectFrames: [CGRect] {
-        let pendingObjectIDs = Set(
-            round.labels.compactMap { label in
-                placedLabels.contains(label.id) ? nil : label.objectID
-            }
-        )
-        return pendingObjectIDs.compactMap { frames[$0] }
-    }
-
     private var estimatedTrayHeight: CGFloat {
         let rowCount = CGFloat((round.labels.count + 1) / 2)
         let gridHeight = (rowCount * 60) + (max(0, rowCount - 1) * 12)
@@ -727,17 +715,14 @@ private struct SnapshotRoundPlayLayer: View {
         let horizontalPadding = Spacing.large.cgFloat
         let panelWidth = max(0, viewSize.width - (horizontalPadding * 2))
         let panelHeight = max(measuredTrayHeight, estimatedTrayHeight)
-        let dock = preferredTrayDock(
+        let clampedOffset = clampedTrayOffset(
+            trayOffset,
             panelWidth: panelWidth,
             panelHeight: panelHeight,
             horizontalPadding: horizontalPadding
         )
-        let trayFrame = trayFrame(
-            for: dock,
-            panelWidth: panelWidth,
-            panelHeight: panelHeight,
-            horizontalPadding: horizontalPadding
-        )
+        let trayCenterX = (viewSize.width / 2) + clampedOffset.width
+        let trayCenterY = baseTrayCenterY(panelHeight: panelHeight) + clampedOffset.height
 
         ZStack {
             ZStack {
@@ -752,16 +737,23 @@ private struct SnapshotRoundPlayLayer: View {
             .offset(parallaxOffset)
             .allowsHitTesting(false)
 
-            vocabularyTray(width: panelWidth)
-                .position(x: trayFrame.midX, y: trayFrame.midY)
+            vocabularyTray(width: panelWidth, horizontalPadding: horizontalPadding)
+                .position(x: trayCenterX, y: trayCenterY)
                 .onPreferenceChange(TrayHeightPreferenceKey.self) { height in
                     guard height > 0 else { return }
                     if abs(height - measuredTrayHeight) > 0.5 {
                         measuredTrayHeight = height
                     }
                 }
-                .animation(.spring(response: 0.35, dampingFraction: 0.82), value: dock)
-                .animation(.spring(response: 0.35, dampingFraction: 0.82), value: measuredTrayHeight)
+                .onChange(of: panelHeight) { _, _ in
+                    trayOffset = clampedTrayOffset(
+                        trayOffset,
+                        panelWidth: panelWidth,
+                        panelHeight: panelHeight,
+                        horizontalPadding: horizontalPadding
+                    )
+                }
+                .animation(.spring(response: 0.3, dampingFraction: 0.82), value: clampedOffset)
 
             if interactive {
                 VStack {
@@ -792,35 +784,81 @@ private struct SnapshotRoundPlayLayer: View {
     }
 
     @ViewBuilder
-    private func vocabularyTray(width: CGFloat) -> some View {
+    private func vocabularyTray(width: CGFloat, horizontalPadding: CGFloat) -> some View {
         TranslucentPanel(cornerRadius: 28) {
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(round.labels) { label in
-                    let state = tokenState(for: label)
-                    DraggableToken(
-                        label: label,
-                        state: state,
-                        interactive: interactive,
-                        dropHandler: { point in
-                            let compensated = CGPoint(
-                                x: point.x - parallaxOffset.width,
-                                y: point.y - parallaxOffset.height
-                            )
-                            guard let destinationID = destination(for: compensated) else { return .ignored }
-                            return attemptMatch(label.id, destinationID)
-                        },
-                        destinationAt: { point in
-                            let compensated = CGPoint(
-                                x: point.x - parallaxOffset.width,
-                                y: point.y - parallaxOffset.height
-                            )
-                            return destination(for: compensated)
-                        }
-                    )
+            VStack(spacing: Spacing.small.cgFloat) {
+                HStack {
+                    Capsule()
+                        .fill(Color.white.opacity(0.35))
+                        .frame(width: 58, height: 5)
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.top, Spacing.xSmall.cgFloat)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 4)
+                        .onChanged { value in
+                            if !isDraggingTray {
+                                trayDragStartOffset = trayOffset
+                                isDraggingTray = true
+                            }
+                            let rawOffset = CGSize(
+                                width: trayDragStartOffset.width + value.translation.width,
+                                height: trayDragStartOffset.height + value.translation.height
+                            )
+                            trayOffset = clampedTrayOffset(
+                                rawOffset,
+                                panelWidth: width,
+                                panelHeight: max(measuredTrayHeight, estimatedTrayHeight),
+                                horizontalPadding: horizontalPadding
+                            )
+                        }
+                        .onEnded { value in
+                            let rawOffset = CGSize(
+                                width: trayDragStartOffset.width + value.translation.width,
+                                height: trayDragStartOffset.height + value.translation.height
+                            )
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                                trayOffset = clampedTrayOffset(
+                                    rawOffset,
+                                    panelWidth: width,
+                                    panelHeight: max(measuredTrayHeight, estimatedTrayHeight),
+                                    horizontalPadding: horizontalPadding
+                                )
+                            }
+                            trayDragStartOffset = trayOffset
+                            isDraggingTray = false
+                        }
+                )
+
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(round.labels) { label in
+                        let state = tokenState(for: label)
+                        DraggableToken(
+                            label: label,
+                            state: state,
+                            interactive: interactive,
+                            dropHandler: { point in
+                                let compensated = CGPoint(
+                                    x: point.x - parallaxOffset.width,
+                                    y: point.y - parallaxOffset.height
+                                )
+                                guard let destinationID = destination(for: compensated) else { return .ignored }
+                                return attemptMatch(label.id, destinationID)
+                            },
+                            destinationAt: { point in
+                                let compensated = CGPoint(
+                                    x: point.x - parallaxOffset.width,
+                                    y: point.y - parallaxOffset.height
+                                )
+                                return destination(for: compensated)
+                            }
+                        )
+                    }
+                }
+                .padding(.top, Spacing.xSmall.cgFloat)
+                .padding(.bottom, Spacing.small.cgFloat)
             }
-            .padding(.top, Spacing.small.cgFloat)
-            .padding(.bottom, Spacing.small.cgFloat)
         }
         .frame(width: width)
         .background(
@@ -830,97 +868,38 @@ private struct SnapshotRoundPlayLayer: View {
         )
     }
 
-    private func preferredTrayDock(panelWidth: CGFloat, panelHeight: CGFloat, horizontalPadding: CGFloat) -> TrayDock {
-        guard !pendingObjectFrames.isEmpty else { return .bottom }
-
-        let bottomFrame = trayFrame(
-            for: .bottom,
-            panelWidth: panelWidth,
-            panelHeight: panelHeight,
-            horizontalPadding: horizontalPadding
-        )
-        let bottomOverlap = overlapScore(trayFrame: bottomFrame, objectFrames: pendingObjectFrames)
-        if bottomOverlap <= 0.18 {
-            return .bottom
-        }
-
-        let penalties: [TrayDock: CGFloat] = [
-            .bottom: 0,
-            .middle: 0.04,
-            .top: 0.08
-        ]
-
-        var bestDock: TrayDock = .bottom
-        var bestScore: CGFloat = .greatestFiniteMagnitude
-
-        for dock in TrayDock.allCases {
-            let candidateFrame = trayFrame(
-                for: dock,
-                panelWidth: panelWidth,
-                panelHeight: panelHeight,
-                horizontalPadding: horizontalPadding
-            )
-            let overlap = overlapScore(trayFrame: candidateFrame, objectFrames: pendingObjectFrames)
-            let score = overlap + (penalties[dock] ?? 0)
-            if score < bestScore {
-                bestScore = score
-                bestDock = dock
-            }
-        }
-
-        return bestDock
-    }
-
-    private func trayFrame(
-        for dock: TrayDock,
+    private func clampedTrayOffset(
+        _ rawOffset: CGSize,
         panelWidth: CGFloat,
         panelHeight: CGFloat,
         horizontalPadding: CGFloat
-    ) -> CGRect {
-        let topInset: CGFloat = 128
-        let bottomInset = Spacing.xLarge.cgFloat
+    ) -> CGSize {
+        let baseCenter = CGPoint(x: viewSize.width / 2, y: baseTrayCenterY(panelHeight: panelHeight))
+        let proposedCenter = CGPoint(
+            x: baseCenter.x + rawOffset.width,
+            y: baseCenter.y + rawOffset.height
+        )
 
-        let minY = topInset
-        let maxY = max(minY, viewSize.height - bottomInset - panelHeight)
-        let middleY = minY + ((maxY - minY) * 0.55)
+        let minCenterX = horizontalPadding + (panelWidth / 2)
+        let maxCenterX = viewSize.width - horizontalPadding - (panelWidth / 2)
 
-        let yOrigin: CGFloat
-        switch dock {
-        case .bottom:
-            yOrigin = maxY
-        case .middle:
-            yOrigin = middleY
-        case .top:
-            yOrigin = minY
-        }
+        let topSafeInset: CGFloat = 110
+        let minCenterY = topSafeInset + (panelHeight / 2)
+        let maxCenterY = viewSize.height - Spacing.xLarge.cgFloat - (panelHeight / 2)
 
-        return CGRect(
-            x: horizontalPadding,
-            y: yOrigin,
-            width: panelWidth,
-            height: panelHeight
+        let clampedCenter = CGPoint(
+            x: min(max(proposedCenter.x, minCenterX), maxCenterX),
+            y: min(max(proposedCenter.y, minCenterY), maxCenterY)
+        )
+
+        return CGSize(
+            width: clampedCenter.x - baseCenter.x,
+            height: clampedCenter.y - baseCenter.y
         )
     }
 
-    private func overlapScore(trayFrame: CGRect, objectFrames: [CGRect]) -> CGFloat {
-        guard !trayFrame.isNull, !trayFrame.isEmpty else { return .greatestFiniteMagnitude }
-
-        var totalScore: CGFloat = 0
-        var contributors: CGFloat = 0
-
-        for objectFrame in objectFrames {
-            let objectArea = objectFrame.width * objectFrame.height
-            guard objectArea > 0 else { continue }
-
-            let overlap = trayFrame.intersection(objectFrame)
-            guard !overlap.isNull, !overlap.isEmpty else { continue }
-
-            totalScore += (overlap.width * overlap.height) / objectArea
-            contributors += 1
-        }
-
-        guard contributors > 0 else { return 0 }
-        return totalScore / contributors
+    private func baseTrayCenterY(panelHeight: CGFloat) -> CGFloat {
+        viewSize.height - Spacing.xLarge.cgFloat - (panelHeight / 2)
     }
 
     private func tokenState(for label: GameKitLS.Label) -> LabelToken.VisualState {
