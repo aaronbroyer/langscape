@@ -124,6 +124,7 @@ public struct RoundGenerator: RoundGenerating {
     public let minimumObjectCount: Int
     public let maximumObjectCount: Int
     public let minConfidence: Double
+    private let frameEdgeInset: Double = 0.02
 
     private let labelProvider: any LabelProviding
     private let logger: Logger
@@ -143,7 +144,19 @@ public struct RoundGenerator: RoundGenerating {
     }
 
     public func makeRound(from detections: [Detection], languagePreference: LanguagePreference) async -> Round? {
-        let confident = detections.filter { $0.confidence >= minConfidence }
+        let playable = detections.filter(isFullyInsidePlayableFrame)
+        let filteredCount = detections.count - playable.count
+        if filteredCount > 0 {
+            Task {
+                await logger.log(
+                    "Filtered \(filteredCount) edge-clipped detections from round candidates",
+                    level: .debug,
+                    category: "GameKitLS.RoundGenerator"
+                )
+            }
+        }
+
+        let confident = playable.filter { $0.confidence >= minConfidence }
         let deduplicated = deduplicate(detections: confident)
         guard deduplicated.count >= minimumObjectCount else {
             Task { await logger.log("Insufficient detections for round", level: .debug, category: "GameKitLS.RoundGenerator") }
@@ -162,7 +175,8 @@ public struct RoundGenerator: RoundGenerating {
     }
 
     public func makeFallbackRound(from detections: [Detection], languagePreference: LanguagePreference) async -> Round? {
-        let grouped = Dictionary(grouping: detections.filter { $0.confidence >= max(0.2, minConfidence * 0.8) }, by: { $0.label.lowercased() })
+        let playable = detections.filter(isFullyInsidePlayableFrame)
+        let grouped = Dictionary(grouping: playable.filter { $0.confidence >= max(0.2, minConfidence * 0.8) }, by: { $0.label.lowercased() })
         let unique = grouped.values.compactMap { $0.max(by: { $0.confidence < $1.confidence }) }
         guard !unique.isEmpty else { return nil }
 
@@ -190,5 +204,17 @@ public struct RoundGenerator: RoundGenerating {
             results.append(detection)
         }
         return results
+    }
+
+    private func isFullyInsidePlayableFrame(_ detection: Detection) -> Bool {
+        let xMin = detection.boundingBox.origin.x
+        let yMin = detection.boundingBox.origin.y
+        let xMax = detection.boundingBox.origin.x + detection.boundingBox.size.width
+        let yMax = detection.boundingBox.origin.y + detection.boundingBox.size.height
+
+        return xMin >= frameEdgeInset &&
+            yMin >= frameEdgeInset &&
+            xMax <= (1 - frameEdgeInset) &&
+            yMax <= (1 - frameEdgeInset)
     }
 }

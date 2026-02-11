@@ -46,10 +46,33 @@ final class RoundGeneratorTests: XCTestCase {
         XCTAssertNil(round)
     }
 
-    private func normalizedRect(x: Double, y: Double) -> NormalizedRect {
+    func testExcludesEdgeClippedDetectionsFromPlayableRound() async {
+        let detections = [
+            Detection(label: "mesita", confidence: 0.96, boundingBox: normalizedRect(x: 0.82, y: 0.40, width: 0.20, height: 0.22)),
+            Detection(label: "book", confidence: 0.92, boundingBox: normalizedRect(x: 0.10, y: 0.10)),
+            Detection(label: "chair", confidence: 0.87, boundingBox: normalizedRect(x: 0.35, y: 0.22)),
+            Detection(label: "lamp", confidence: 0.83, boundingBox: normalizedRect(x: 0.56, y: 0.42))
+        ]
+
+        let provider = TestLabelProvider(mapping: [
+            "mesita": "mesita",
+            "book": "libro",
+            "chair": "silla",
+            "lamp": "lampara"
+        ])
+
+        let generator = RoundGenerator(minimumObjectCount: 3, maximumObjectCount: 5, labelProvider: provider)
+        let round = await generator.makeRound(from: detections, languagePreference: .englishToSpanish)
+
+        XCTAssertNotNil(round)
+        XCTAssertEqual(round?.objects.count, 3)
+        XCTAssertFalse(round?.objects.contains(where: { $0.sourceLabel == "mesita" }) ?? true)
+    }
+
+    private func normalizedRect(x: Double, y: Double, width: Double = 0.2, height: Double = 0.2) -> NormalizedRect {
         NormalizedRect(
             origin: .init(x: x, y: y),
-            size: .init(width: 0.2, height: 0.2)
+            size: .init(width: width, height: height)
         )
     }
 }
